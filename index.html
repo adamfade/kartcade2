@@ -18,14 +18,7 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="/favicon.png" />
 
-  <!-- Google Analytics (GA4) - Replace G-XXXXXXXXXX with your actual GA4 Measurement ID -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-    gtag('config', 'G-XXXXXXXXXX');
-  </script>
+  <!-- Google Analytics is injected at build time when VITE_GA_ID is set (scripts/prerender.mjs) -->
 
   <!-- Google Fonts - Outfit (matches their current branding) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -154,76 +147,39 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "LocalBusiness",
+    "@type": "EntertainmentBusiness",
+    "@id": "https://kartcade.com/#business",
     "name": "Kartcade",
+    "alternateName": "Kartcade Racing & Flight Simulator Lounge",
     "url": "https://kartcade.com",
     "logo": "https://kartcade.com/logo.png",
-    "description": "Oregon's premier racing simulator lounge featuring 10 state-of-the-art simulators including racing rigs, karts, and flight sim.",
+    "description": "Oregon's first racing and flight simulator lounge with 10 simulators: a full-motion rig, direct-drive racing rigs, racing karts and a flight simulator.",
+    "telephone": "+1-503-490-9194",
     "email": "info@kartcade.com",
     "address": {
       "@type": "PostalAddress",
+      "streetAddress": "18750 Willamette Dr",
       "addressLocality": "West Linn",
       "addressRegion": "OR",
+      "postalCode": "97068",
       "addressCountry": "US"
     },
-    "sameAs": [
-      "https://maps.app.goo.gl/KkMsyMYUE1E1H9Z36"
-    ],
-    "contactPoint": {
-      "@type": "ContactPoint",
-      "email": "info@kartcade.com",
-      "contactType": "customer service",
-      "availableLanguage": ["English"]
-    },
-    "priceRange": "$20 - $400+",
+    "areaServed": ["West Linn", "Lake Oswego", "Oregon City", "Tualatin", "Wilsonville", "Portland"],
+    "hasMap": "https://maps.app.goo.gl/KkMsyMYUE1E1H9Z36",
+    "priceRange": "$30 - $400+",
     "openingHoursSpecification": {
       "@type": "OpeningHoursSpecification",
-      "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    }
-  }
-  </script>
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "AmusementPark",
-    "name": "Kartcade",
-    "description": "Racing and flight simulator lounge with 10 simulators, private events, birthday parties, and corporate team building.",
-    "url": "https://kartcade.com",
-    "email": "info@kartcade.com",
-    "hasOfferCatalog": {
-      "@type": "OfferCatalog",
-      "name": "Simulator Experiences",
-      "itemListElement": [
-        {
-          "@type": "Offer",
-          "itemOffered": {
-            "@type": "Service",
-            "name": "Racing Simulator Sessions"
-          }
-        },
-        {
-          "@type": "Offer",
-          "itemOffered": {
-            "@type": "Service",
-            "name": "Flight Simulator Experience"
-          }
-        },
-        {
-          "@type": "Offer",
-          "itemOffered": {
-            "@type": "Service",
-            "name": "Birthday Party Packages"
-          }
-        },
-        {
-          "@type": "Offer",
-          "itemOffered": {
-            "@type": "Service",
-            "name": "Corporate Team Building"
-          }
-        }
-      ]
-    }
+      "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      "opens": "10:00",
+      "closes": "22:00"
+    },
+    "makesOffer": [
+      {"@type": "Offer", "name": "Racing Karts (ages 5+)", "price": "30", "priceCurrency": "USD", "unitText": "per person per hour"},
+      {"@type": "Offer", "name": "Full Sim Rig", "price": "40", "priceCurrency": "USD", "unitText": "per person per hour"},
+      {"@type": "Offer", "name": "Motion Simulator", "price": "50", "priceCurrency": "USD", "unitText": "per person per hour"},
+      {"@type": "Offer", "name": "Flight Simulator", "price": "40", "priceCurrency": "USD", "unitText": "per person per hour"},
+      {"@type": "Offer", "name": "Birthday Party Package", "price": "400", "priceCurrency": "USD"}
+    ]
   }
   </script>
 </head>

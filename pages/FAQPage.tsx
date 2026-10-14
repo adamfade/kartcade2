@@ -91,7 +91,7 @@ const faqCategories = [
         questions: [
             {
                 q: "How does pricing work?",
-                a: "Pricing is per person, not per simulator. This means everyone in your group gets their own rig to race simultaneously—no taking turns! Rates start at $25/hour for adults and $20/hour for youth on karts."
+                a: "Pricing is per person, not per simulator. This means everyone in your group gets their own rig to race simultaneously—no taking turns! Rates start at $30/hour on the racing karts and $40/hour on the full sim rigs."
             },
             {
                 q: "What's included in my session?",

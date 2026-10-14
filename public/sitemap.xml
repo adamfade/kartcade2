@@ -1,76 +1,63 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://yourdomain.com/</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>weekly</changefreq>
+    <loc>https://kartcade.com/</loc>
+    <lastmod>2026-10-13</lastmod>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://yourdomain.com/about</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/services</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
+    <loc>https://kartcade.com/pricing</loc>
+    <lastmod>2026-10-13</lastmod>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://yourdomain.com/services/website-development</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/services/seo</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/services/branding</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/services/social-media</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/services/graphic-design</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/projects</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://yourdomain.com/pricing</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
+    <loc>https://kartcade.com/experiences</loc>
+    <lastmod>2026-10-13</lastmod>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://yourdomain.com/contact</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
+    <loc>https://kartcade.com/equipment</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/events</loc>
+    <lastmod>2026-10-13</lastmod>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://yourdomain.com/express-launch</loc>
-    <lastmod>2026-01-06</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.9</priority>
+    <loc>https://kartcade.com/membership</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/leaderboard</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/faq</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/gallery</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/about</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/contact</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kartcade.com/rules</loc>
+    <lastmod>2026-10-13</lastmod>
+    <priority>0.7</priority>
   </url>
 </urlset>
-
