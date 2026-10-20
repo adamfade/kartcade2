@@ -127,12 +127,19 @@ function mc() {
 async function ensureMergeFields(call: any, list: string) {
     const wanted = [
         { tag: 'VISITS', name: 'Visits', type: 'number' },
-        { tag: 'LASTVISIT', name: 'Last visit', type: 'date', options: { date_format: 'YYYY-MM-DD' } },
-        { tag: 'SIGNUP', name: 'Account created', type: 'date', options: { date_format: 'YYYY-MM-DD' } },
+        { tag: 'LASTVISIT', name: 'Last visit', type: 'date', options: { date_format: 'MM/DD/YYYY' } },
+        { tag: 'SIGNUP', name: 'Account created', type: 'date', options: { date_format: 'MM/DD/YYYY' } },
     ];
     const existing = await call('GET', `/lists/${list}/merge-fields?count=100&fields=merge_fields.tag`);
     const have = new Set((existing.merge_fields || []).map((f: any) => f.tag));
-    for (const f of wanted) if (!have.has(f.tag)) await call('POST', `/lists/${list}/merge-fields`, { ...f, public: false });
+    for (const f of wanted) {
+        if (have.has(f.tag)) continue;
+        try {
+            await call('POST', `/lists/${list}/merge-fields`, { ...f, public: false });
+        } catch (e: any) {
+            console.error('merge field', f.tag, e.message); // keep going; the member update reports it too
+        }
+    }
 }
 
 function fingerprint(c: Contact) {
@@ -166,8 +173,10 @@ async function syncToMailchimp(contacts: Contact[], deadline: number) {
         if (Date.now() > deadline) return; // finish next run
         const hash = md5(c.email);
         const merge: Record<string, any> = { FNAME: c.first, LNAME: c.last, VISITS: c.visits };
-        if (c.lastVisit) merge.LASTVISIT = c.lastVisit;
-        if (c.signup) merge.SIGNUP = c.signup;
+        // Mailchimp date fields take MM/DD/YYYY
+        const us = (d: string) => `${d.slice(5, 7)}/${d.slice(8, 10)}/${d.slice(0, 4)}`;
+        if (c.lastVisit) merge.LASTVISIT = us(c.lastVisit);
+        if (c.signup) merge.SIGNUP = us(c.signup);
         await call('PUT', `/lists/${list}/members/${hash}`, {
             email_address: c.email,
             status_if_new: 'subscribed',
@@ -272,6 +281,7 @@ export default async function handler(req: any, res: any) {
         }
 
         summary.mailchimp = await syncToMailchimp(contacts, deadline);
+        console.log('marketing-sync', JSON.stringify(summary));
 
         const isMonday = new Date(today() + 'T12:00:00').getDay() === 1;
         if (isMonday || req.query?.scorecard === '1') {
