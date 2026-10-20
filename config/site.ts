@@ -34,7 +34,7 @@ export const siteConfig = {
   // Business Info (for structured data)
   business: {
     priceRange: "$30 - $400+",
-    openingHours: "10:00 AM - 10:00 PM",
+    openingHours: "Wed-Sun 10:00 AM - 10:00 PM (closed Mon-Tue)",
     areaServed: "West Linn, Oregon",
     languages: ["English"]
   },

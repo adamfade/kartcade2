@@ -181,7 +181,18 @@ function handleRequest(e) {
         }
         if (action === 'userBookings') { return getUserBookings(e.parameter.email); }
         if (action === 'cancel') { return cancelBooking(e.parameter.id); }
-        if (action === 'allBookings') { return getAllBookings(); }
+        if (action === 'emailReport') {
+            // v2.5: weekly marketing scorecard from the website's sync job
+            if (!isAdminKey(e.parameter.key)) return createResponse({ success: false, error: 'unauthorized' });
+            const to = String(e.parameter.to || 'kartcade.website@gmail.com');
+            MailApp.sendEmail(to, String(e.parameter.subject || 'Kartcade weekly scorecard'), String(e.parameter.body || ''));
+            return createResponse({ success: true });
+        }
+        if (action === 'allBookings') {
+            // v2.5: customer data needs the admin key (Script Properties -> ADMIN_KEY)
+            if (!isAdminKey(e.parameter.key)) return createResponse({ success: false, error: 'unauthorized' });
+            return getAllBookings();
+        }
         if (action === 'getBooking') { return getBooking(e.parameter.id); }
 
         return createResponse({ error: 'Invalid action: ' + action }, 400);
@@ -524,6 +535,13 @@ function parseHour(val) {
     const t = normalizeTime(val);
     const parts = t.split(':');
     return parseInt(parts[0]);
+}
+
+// v2.5: shared secret for admin-only actions. Set it once in
+// Project Settings -> Script Properties -> ADMIN_KEY (same value as APPS_SCRIPT_ADMIN_KEY in Vercel).
+function isAdminKey(key) {
+    const secret = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
+    return !!secret && !!key && String(key) === secret;
 }
 
 function createResponse(data, status) {

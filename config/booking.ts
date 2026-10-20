@@ -236,10 +236,13 @@ export const bookingApi = {
     // Get ALL bookings (Admin Dashboard)
     async getAllBookings() {
         try {
-            const url = `${bookingConfig.API_URL}?action=allBookings&t=${Date.now()}`;
-            const response = await fetch(url, {
+            // Customer data goes through our own server, which checks the admin's sign-in.
+            const { auth } = await import('./firebase');
+            const token = await auth.currentUser?.getIdToken();
+            if (!token) throw new Error('Not signed in');
+            const response = await fetch(`/api/admin/bookings?t=${Date.now()}`, {
                 method: 'GET',
-                redirect: 'follow'
+                headers: { Authorization: `Bearer ${token}` }
             });
 
             const data = await response.json();
