@@ -19,7 +19,7 @@ export const siteConfig = {
   },
 
   // URLs
-  siteUrl: "https://kartcade.com",
+  siteUrl: "https://www.kartcade.com",
   giftCardsUrl: "https://giftup.app/place-order/dd0ba2da-46cb-4e33-43c4-08de38bb5f40?platform=hosted",
   googleMapsUrl: "https://maps.app.goo.gl/KkMsyMYUE1E1H9Z36",
 
