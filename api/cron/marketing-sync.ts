@@ -169,7 +169,7 @@ async function syncToMailchimp(contacts: Contact[], deadline: number) {
     const changed = contacts.filter((c) => state[md5(c.email)] !== fingerprint(c));
 
     let synced = 0;
-    const errors = await pool(changed, 8, async (c) => {
+    const errors = await pool(changed, 12, async (c) => {
         if (Date.now() > deadline) return; // finish next run
         const hash = md5(c.email);
         const merge: Record<string, any> = { FNAME: c.first, LNAME: c.last, VISITS: c.visits };
@@ -265,9 +265,13 @@ export default async function handler(req: any, res: any) {
     if (!secret || req.headers.authorization !== `Bearer ${secret}`) {
         return res.status(401).json({ error: 'unauthorized' });
     }
-    const deadline = Date.now() + 45_000;
+    const deadline = Date.now() + 50_000;
     try {
-        const bookings = flattenBookings(await fetchAllBookings());
+        const sheet = await fetchAllBookings(true);
+        // Without the full history (older script versions cap past bookings at 50) real
+        // customers would be tagged "never booked". Refuse to sync rather than mis-tag.
+        if (!sheet.full) throw new Error('Booking sheet did not return full history; update the Apps Script (allBookings full=1)');
+        const bookings = flattenBookings(sheet);
         const users = (await db.collection('users').select('email', 'name', 'phone', 'createdAt').get()).docs.map((d) => d.data());
         const contacts = [...buildContacts(bookings, users).values()];
 

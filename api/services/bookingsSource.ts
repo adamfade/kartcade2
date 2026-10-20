@@ -24,14 +24,15 @@ export interface AllBookingsResponse {
     upcoming?: SheetBooking[];
     past?: SheetBooking[];
     stats?: Record<string, number>;
+    full?: boolean;
     error?: string;
 }
 
-export async function fetchAllBookings(): Promise<AllBookingsResponse> {
+export async function fetchAllBookings(full = false): Promise<AllBookingsResponse> {
     const key = process.env.APPS_SCRIPT_ADMIN_KEY;
     if (!key) throw new Error('APPS_SCRIPT_ADMIN_KEY is not set');
     const base = process.env.APPS_SCRIPT_URL || DEFAULT_URL;
-    const url = `${base}?action=allBookings&key=${encodeURIComponent(key)}&t=${Date.now()}`;
+    const url = `${base}?action=allBookings&key=${encodeURIComponent(key)}${full ? '&full=1' : ''}&t=${Date.now()}`;
     const res = await fetch(url, { redirect: 'follow' });
     if (!res.ok) throw new Error(`Booking sheet returned ${res.status}`);
     const data = (await res.json()) as AllBookingsResponse;
