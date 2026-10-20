@@ -57,8 +57,19 @@ export const bookingConfig = {
     },
 
     // Operating hours
-    openHour: 10,
-    closeHour: 22,
+    openHour: 10,   // earliest opening across the week
+    closeHour: 21,  // latest closing across the week
+    // Opening hours by weekday (0 = Sunday), [open, close) in 24h. null = closed.
+    // Keep in sync with HOURS_BY_DAY in the booking Apps Script.
+    hoursByDay: {
+        0: [10, 19],
+        1: null,
+        2: null,
+        3: [14, 20],
+        4: [14, 20],
+        5: [14, 21],
+        6: [10, 21],
+    } as Record<number, [number, number] | null>,
 
     // Booking rules
     minAdvanceHours: 8, // Minimum hours in advance to book (8h notice required)
@@ -236,10 +247,13 @@ export const bookingApi = {
     // Get ALL bookings (Admin Dashboard)
     async getAllBookings() {
         try {
-            const url = `${bookingConfig.API_URL}?action=allBookings&t=${Date.now()}`;
-            const response = await fetch(url, {
+            // Customer data goes through our own server, which checks the admin's sign-in.
+            const { auth } = await import('./firebase');
+            const token = await auth.currentUser?.getIdToken();
+            if (!token) throw new Error('Not signed in');
+            const response = await fetch(`/api/admin/bookings?t=${Date.now()}`, {
                 method: 'GET',
-                redirect: 'follow'
+                headers: { Authorization: `Bearer ${token}` }
             });
 
             const data = await response.json();

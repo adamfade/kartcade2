@@ -181,7 +181,18 @@ function handleRequest(e) {
         }
         if (action === 'userBookings') { return getUserBookings(e.parameter.email); }
         if (action === 'cancel') { return cancelBooking(e.parameter.id); }
-        if (action === 'allBookings') { return getAllBookings(); }
+        if (action === 'emailReport') {
+            // v2.5: weekly marketing scorecard from the website's sync job
+            if (!isAdminKey(e.parameter.key)) return createResponse({ success: false, error: 'unauthorized' });
+            const to = String(e.parameter.to || 'kartcade.website@gmail.com');
+            MailApp.sendEmail(to, String(e.parameter.subject || 'Kartcade weekly scorecard'), String(e.parameter.body || ''));
+            return createResponse({ success: true });
+        }
+        if (action === 'allBookings') {
+            // v2.5: customer data needs the admin key (Script Properties -> ADMIN_KEY)
+            if (!isAdminKey(e.parameter.key)) return createResponse({ success: false, error: 'unauthorized' });
+            return getAllBookings();
+        }
         if (action === 'getBooking') { return getBooking(e.parameter.id); }
 
         return createResponse({ error: 'Invalid action: ' + action }, 400);
@@ -210,13 +221,33 @@ function getAvailability(dateStr, stationId, durationStr) {
     return createResponse({ date: dateStr, station: stationId, availability: avail });
 }
 
+// v2.5: opening hours by weekday (0 = Sunday). null = closed.
+// Keep in sync with HOURS_BY_DAY in the website's config/booking.ts.
+const HOURS_BY_DAY = {
+    0: [10, 19], // Sunday 10am-7pm
+    1: null,     // Monday closed
+    2: null,     // Tuesday closed
+    3: [14, 20], // Wednesday 2pm-8pm
+    4: [14, 20], // Thursday 2pm-8pm
+    5: [14, 21], // Friday 2pm-9pm
+    6: [10, 21]  // Saturday 10am-9pm
+};
+
+function getHoursForDate(dateStr) {
+    const parts = String(dateStr).split('-').map(Number);
+    const day = new Date(parts[0], parts[1] - 1, parts[2], 12).getDay();
+    return HOURS_BY_DAY[day] || null;
+}
+
 function getAvailabilityForStation(dateStr, stationId, duration) {
     const station = STATIONS[stationId];
     if (!station) return {};
 
     const totalUnits = getSetting(station.settingKey) || 1;
-    const openHour = getSetting('OpenHour') || 10;
-    const closeHour = getSetting('CloseHour') || 22;
+    const dayHours = getHoursForDate(dateStr);
+    if (!dayHours) return {}; // closed that day
+    const openHour = dayHours[0];
+    const closeHour = dayHours[1];
 
     const bookedSlots = {};
 
@@ -524,6 +555,13 @@ function parseHour(val) {
     const t = normalizeTime(val);
     const parts = t.split(':');
     return parseInt(parts[0]);
+}
+
+// v2.5: shared secret for admin-only actions. Set it once in
+// Project Settings -> Script Properties -> ADMIN_KEY (same value as APPS_SCRIPT_ADMIN_KEY in Vercel).
+function isAdminKey(key) {
+    const secret = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
+    return !!secret && !!key && String(key) === secret;
 }
 
 function createResponse(data, status) {
