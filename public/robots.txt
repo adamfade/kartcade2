@@ -4,4 +4,4 @@ Disallow: /dashboard
 Disallow: /checkout
 Disallow: /onboarding
 
-Sitemap: https://kartcade.com/sitemap.xml
+Sitemap: https://www.kartcade.com/sitemap.xml

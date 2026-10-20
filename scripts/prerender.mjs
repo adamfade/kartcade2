@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const SITE = 'https://kartcade.com';
+const SITE = 'https://www.kartcade.com';
 const DIST = 'dist';
 const GA_ID = process.env.VITE_GA_ID || '';
 
