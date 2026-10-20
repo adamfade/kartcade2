@@ -13,7 +13,8 @@ const SITE = 'https://www.kartcade.com';
 const DIST = 'dist';
 const GA_ID = process.env.VITE_GA_ID || '';
 
-const NAP = `<p>Kartcade, 18750 Willamette Dr, West Linn, OR 97068 · <a href="tel:+15034909194">503-490-9194</a> · <a href="/book">Book a session</a></p>`;
+const NAP = `<p>Kartcade, 18750 Willamette Dr, West Linn, OR 97068 · <a href="tel:+15034909194">503-490-9194</a> · <a href="/book">Book a session</a></p>
+<p>Hours: Wed and Thu 2pm to 8pm, Fri 2pm to 9pm, Sat 10am to 9pm, Sun 10am to 7pm. Closed Mon and Tue.</p>`;
 
 const routes = [
   {

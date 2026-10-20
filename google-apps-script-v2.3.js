@@ -221,13 +221,33 @@ function getAvailability(dateStr, stationId, durationStr) {
     return createResponse({ date: dateStr, station: stationId, availability: avail });
 }
 
+// v2.5: opening hours by weekday (0 = Sunday). null = closed.
+// Keep in sync with HOURS_BY_DAY in the website's config/booking.ts.
+const HOURS_BY_DAY = {
+    0: [10, 19], // Sunday 10am-7pm
+    1: null,     // Monday closed
+    2: null,     // Tuesday closed
+    3: [14, 20], // Wednesday 2pm-8pm
+    4: [14, 20], // Thursday 2pm-8pm
+    5: [14, 21], // Friday 2pm-9pm
+    6: [10, 21]  // Saturday 10am-9pm
+};
+
+function getHoursForDate(dateStr) {
+    const parts = String(dateStr).split('-').map(Number);
+    const day = new Date(parts[0], parts[1] - 1, parts[2], 12).getDay();
+    return HOURS_BY_DAY[day] || null;
+}
+
 function getAvailabilityForStation(dateStr, stationId, duration) {
     const station = STATIONS[stationId];
     if (!station) return {};
 
     const totalUnits = getSetting(station.settingKey) || 1;
-    const openHour = getSetting('OpenHour') || 10;
-    const closeHour = getSetting('CloseHour') || 22;
+    const dayHours = getHoursForDate(dateStr);
+    if (!dayHours) return {}; // closed that day
+    const openHour = dayHours[0];
+    const closeHour = dayHours[1];
 
     const bookedSlots = {};
 

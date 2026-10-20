@@ -61,9 +61,11 @@ const stationTypes = [
 ];
 
 // Generate time slots
-const generateTimeSlots = () => {
-    const slots = [];
-    for (let hour = bookingConfig.openHour; hour < bookingConfig.closeHour; hour++) {
+const generateTimeSlots = (date?: Date | null) => {
+    const slots: string[] = [];
+    const hours = date ? bookingConfig.hoursByDay[date.getDay()] : [bookingConfig.openHour, bookingConfig.closeHour];
+    if (!hours) return slots; // closed
+    for (let hour = hours[0]; hour < hours[1]; hour++) {
         slots.push(`${hour}:00`);
     }
     return slots;
@@ -221,7 +223,7 @@ const BookingPage: React.FC = () => {
 
     // Dates for calendar
     const dates = generateDates();
-    const timeSlots = generateTimeSlots();
+    const timeSlots = generateTimeSlots(selectedDate);
 
     // Get first equipment type in cart for availability
     const getFirstCartEquipment = (): string | null => {
@@ -277,6 +279,8 @@ const BookingPage: React.FC = () => {
         if (slot) {
             return slot.available;
         }
+        // Availability loaded but this hour isn't in it: outside opening hours.
+        if (Object.keys(availability).length > 0) return 0;
         // Fallback to station max
         const station = stationTypes.find(s => s.id === selectedStation);
         return station?.units || 1;
