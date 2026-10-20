@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 
 // Initialize Gemini (Client Side for Demo)
 // Note: In production, moving this back to an API route is safer for key protection.
-const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyAiKejW3Sy1QdqCi1CG-UCnLomvpnOEEJI");
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }); // Using 3.0 Flash Preview
 
 const getCurrentDate = () => {

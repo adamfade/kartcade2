@@ -1,4 +1,7 @@
 User-agent: *
 Allow: /
+Disallow: /dashboard
+Disallow: /checkout
+Disallow: /onboarding
 
-Sitemap: https://graphikrafts.vercel.app/sitemap.xml
+Sitemap: https://kartcade.com/sitemap.xml
