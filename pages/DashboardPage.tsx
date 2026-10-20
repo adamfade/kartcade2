@@ -139,7 +139,7 @@ const DashboardPage: React.FC = () => {
     const [adminPartyTab, setAdminPartyTab] = useState<'active' | 'archive'>('active');
 
     //  Lap Times State 
-    const SUPER_ADMIN_EMAILS = ['adamjames9@gmail.com', 'devansh7704patel@gmail.com'];
+    const SUPER_ADMIN_EMAILS = ['adamjames9@gmail.com'];
     const isSuperAdmin = !!(currentUser?.email && SUPER_ADMIN_EMAILS.includes(currentUser.email));
     const [myLapTimes, setMyLapTimes] = useState<any[]>([]);
     const [adminLapTimes, setAdminLapTimes] = useState<any[]>([]);

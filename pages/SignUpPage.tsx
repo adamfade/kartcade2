@@ -96,6 +96,8 @@ const SignUpPage: React.FC = () => {
             }
 
             // Email sign up collects data inline, so go straight to dashboard
+            const hasPendingBooking = (() => { try { return !!sessionStorage.getItem('kartcade.pendingBooking'); } catch { return false; } })();
+            if (!partyId && hasPendingBooking) { navigate('/book'); return; }
             navigate('/dashboard', { state: { message: partyId ? 'Welcome to the party!' : 'Profile created successfully!' } });
         } catch (err: any) {
             if (err.code === 'auth/email-already-in-use') {

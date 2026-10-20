@@ -18,7 +18,7 @@ if (!admin.apps.length) {
 
 const ADMIN_EMAILS = (
     process.env.ADMIN_EMAILS ||
-    'kartcade.website@gmail.com,devansh7704patel@gmail.com,adamjames9@gmail.com,info@kartcade.com'
+    'kartcade.website@gmail.com,adamjames9@gmail.com,info@kartcade.com'
 )
     .split(',')
     .map((e) => e.trim().toLowerCase())

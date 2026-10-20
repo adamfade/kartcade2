@@ -73,7 +73,9 @@ const LoginPage: React.FC = () => {
                             <span className="text-[#D42428]">Kartcade</span>
                         </h1>
                         <p className="text-white/60 font-sans text-sm">
-                            Access your Driver Profile and book sessions
+                            {(location.state as any)?.reason === 'booking'
+                                ? 'Your time is saved. Sign in, or create a free driver profile, to finish booking.'
+                                : 'Access your Driver Profile and book sessions'}
                         </p>
                     </div>
 

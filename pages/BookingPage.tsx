@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import {
@@ -185,6 +185,38 @@ const BookingPage: React.FC = () => {
         phone: '',
         notes: ''
     });
+
+    // Anyone can browse availability; a driver profile is required to book.
+    // The selection survives the trip through login or sign-up.
+    const navigate = useNavigate();
+    const PENDING_KEY = 'kartcade.pendingBooking';
+    useEffect(() => {
+        if (!currentUser) return;
+        try {
+            const raw = sessionStorage.getItem(PENDING_KEY);
+            if (!raw) return;
+            sessionStorage.removeItem(PENDING_KEY);
+            const p = JSON.parse(raw);
+            if (p.cart) setEquipmentCart(p.cart);
+            if (p.duration) setDuration(p.duration);
+            if (p.station) setSelectedStation(p.station);
+            if (p.date) { const [y, m, d] = p.date.split('-').map(Number); setSelectedDate(new Date(y, m - 1, d)); }
+            if (p.time) setSelectedTime(p.time);
+            if (p.date && p.time) setStep(3);
+        } catch { /* storage unavailable: start fresh */ }
+    }, [currentUser]);
+
+    const continueToDetails = () => {
+        if (!selectedDate || !selectedTime) return;
+        if (currentUser) { setStep(3); return; }
+        try {
+            sessionStorage.setItem(PENDING_KEY, JSON.stringify({
+                cart: equipmentCart, duration, station: selectedStation,
+                date: formatDateForApi(selectedDate), time: selectedTime,
+            }));
+        } catch { /* ignore */ }
+        navigate('/login', { state: { from: '/book', reason: 'booking' } });
+    };
 
     const hasAnyEquipment = () => {
         return Object.values(equipmentCart).some(qty => qty > 0);
@@ -823,7 +855,7 @@ const BookingPage: React.FC = () => {
                                             disabled={!hasAnyEquipment()}
                                             className="flex items-center gap-3 px-10 py-4 bg-[#D42428] text-white rounded-full font-bold uppercase tracking-widest hover:bg-[#B91C1C] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
-                                            Continue <ArrowRight className="w-5 h-5" />
+                                            {currentUser ? 'Continue' : 'Sign in to book'} <ArrowRight className="w-5 h-5" />
                                         </button>
                                     </div>
                                 </div>
@@ -988,7 +1020,7 @@ const BookingPage: React.FC = () => {
                                             <ArrowLeft className="w-5 h-5" /> Back
                                         </button>
                                         <button
-                                            onClick={() => selectedDate && selectedTime && setStep(3)}
+                                            onClick={continueToDetails}
                                             disabled={!selectedDate || !selectedTime}
                                             className="flex items-center gap-3 px-10 py-4 bg-[#D42428] text-white rounded-full font-bold uppercase tracking-widest hover:bg-[#B91C1C] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         >

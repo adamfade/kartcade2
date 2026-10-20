@@ -35,7 +35,8 @@ const OnboardingPage: React.FC = () => {
                 // Mark rules/waiver as accepted since they clicked through the modal to get here (or we can re-confirm if needed, but Google modal had it)
                 // Actually, wait, the Google Modal had the checkboxes. So we are good.
             });
-            navigate('/dashboard');
+            const hasPendingBooking = (() => { try { return !!sessionStorage.getItem('kartcade.pendingBooking'); } catch { return false; } })();
+            navigate(hasPendingBooking ? '/book' : '/dashboard');
         } catch (err) {
             console.error(err);
             setError('Failed to update profile. Please try again.');

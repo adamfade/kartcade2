@@ -4,9 +4,9 @@ service cloud.firestore {
     
     // Helper: Check if the requesting user is an admin
     function isAdmin() {
-      return request.auth != null && (
+      // email_verified: anyone can create an unverified account using an admin's address
+      return request.auth != null && request.auth.token.email_verified == true && (
         request.auth.token.email == 'kartcade.website@gmail.com' ||
-        request.auth.token.email == 'devansh7704patel@gmail.com' ||
         request.auth.token.email == 'adamjames9@gmail.com' ||
         request.auth.token.email == 'info@kartcade.com'
       );
@@ -26,8 +26,12 @@ service cloud.firestore {
       // Any authenticated user can create a party (when booking)
       allow create: if request.auth != null;
       
-      // Any authenticated user can update (Host updating details, or Guests joining via arrayUnion)
-      allow update: if request.auth != null;
+      // Host or admin can update anything; any signed-in guest may only add themselves to the guest list
+      allow update: if isAdmin()
+        || (request.auth != null && resource.data.hostUserId == request.auth.uid)
+        || (request.auth != null
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['registeredGuests', 'updatedAt'])
+            && request.resource.data.registeredGuests.size() == resource.data.get('registeredGuests', []).size() + 1);
       
       // Only admins can delete a party (prevent accidental deletions)
       allow delete: if isAdmin();
