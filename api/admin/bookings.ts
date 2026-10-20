@@ -4,7 +4,7 @@
 // which exposed every customer's name, email and phone to anyone with the URL.
 
 import admin from 'firebase-admin';
-import { fetchAllBookings } from '../services/bookingsSource';
+import { fetchAllBookings } from '../services/bookingsSource.js';
 
 if (!admin.apps.length) {
     admin.initializeApp({

@@ -22,7 +22,7 @@ import {
     isExcluded,
     FULL_BUYOUT_RIGS,
     SheetBooking,
-} from '../services/bookingsSource';
+} from '../services/bookingsSource.js';
 
 
 if (!admin.apps.length) {
