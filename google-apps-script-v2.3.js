@@ -191,7 +191,7 @@ function handleRequest(e) {
         if (action === 'allBookings') {
             // v2.5: customer data needs the admin key (Script Properties -> ADMIN_KEY)
             if (!isAdminKey(e.parameter.key)) return createResponse({ success: false, error: 'unauthorized' });
-            return getAllBookings();
+            return getAllBookings(e.parameter.full === '1');
         }
         if (action === 'getBooking') { return getBooking(e.parameter.id); }
 
@@ -633,7 +633,7 @@ function getUserBookings(email) {
     return createResponse({ success: true, bookings: result });
 }
 
-function getAllBookings() {
+function getAllBookings(full) {
     const rows = BOOKINGS_SHEET.getDataRange().getValues();
     const today = new Date();
     const todayStr = Utilities.formatDate(today, 'America/Los_Angeles', 'yyyy-MM-dd');
@@ -665,7 +665,8 @@ function getAllBookings() {
         success: true,
         today: todayBookings,
         upcoming: upcomingBookings,
-        past: pastBookings.slice(0, 50),
+        past: full ? pastBookings : pastBookings.slice(0, 50),
+        full: !!full,
         stats: { todayCount: todayBookings.length, upcomingCount: upcomingBookings.length, pastCount: pastBookings.length }
     });
 }
