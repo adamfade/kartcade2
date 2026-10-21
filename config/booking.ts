@@ -71,6 +71,12 @@ export const bookingConfig = {
         6: [10, 21],
     } as Record<number, [number, number] | null>,
 
+    // Private party / whole-space pricing: $400 for the first 2 hours, $200 for each extra hour.
+    partyMinHours: 2,
+    partyBasePrice: 400,
+    partyExtraHourPrice: 200,
+    partyMaxGuests: 40,
+
     // Booking rules
     minAdvanceHours: 8, // Minimum hours in advance to book (8h notice required)
     maxAdvanceDays: 56, // Maximum days in advance to book (8 weeks)

@@ -541,8 +541,26 @@ const BookingPage: React.FC = () => {
         setIsSubmitting(false);
     };
 
+    // Whole space = every unit of every station
+    const isFullSpace = () => stationTypes.every(s => (equipmentCart[s.id] || 0) === s.units);
+    const partyRateApplies = () => isFullSpace() && duration >= bookingConfig.partyMinHours;
+    const partyPrice = (hours: number) =>
+        bookingConfig.partyBasePrice + Math.max(0, hours - bookingConfig.partyMinHours) * bookingConfig.partyExtraHourPrice;
+    const selectFullSpace = () => {
+        const all: EquipmentCart = { karts: 0, rigs: 0, motion: 0, flight: 0 };
+        stationTypes.forEach(s => { (all as any)[s.id] = s.units; });
+        setEquipmentCart(all);
+        if (duration < bookingConfig.partyMinHours) setDuration(bookingConfig.partyMinHours);
+    };
+    const hourlyTotal = () => {
+        let t = 0;
+        stationTypes.forEach(station => { t += station.price * (equipmentCart[station.id] || 0) * duration; });
+        return t;
+    };
+
     // Calculate total - UPDATED for multi-booking
     const calculateTotal = () => {
+        if (partyRateApplies()) return partyPrice(duration);
         // If using legacy single-station mode
         if (selectedStation && !hasAnyEquipment()) {
             if (!selectedStationData) return 0;
@@ -710,6 +728,22 @@ const BookingPage: React.FC = () => {
                                         Select Equipment & Duration
                                     </h2>
 
+                                    {/* Whole space */}
+                                    <button
+                                        type="button"
+                                        onClick={selectFullSpace}
+                                        className={`w-full mb-6 p-5 rounded-2xl border-2 text-left transition-all flex items-center justify-between gap-4 ${isFullSpace()
+                                            ? 'border-[#D42428] bg-[#D42428]/10'
+                                            : 'border-white/10 bg-[#141414] hover:border-[#D42428]/60'
+                                            }`}
+                                    >
+                                        <div>
+                                            <div className="font-display text-lg font-bold uppercase">Book the entire space</div>
+                                            <div className="text-sm text-white/60">All 10 simulators, private, up to {bookingConfig.partyMaxGuests} people. ${bookingConfig.partyBasePrice} for 2 hours, ${bookingConfig.partyExtraHourPrice} each extra hour.</div>
+                                        </div>
+                                        {isFullSpace() ? <CheckCircle className="w-6 h-6 text-[#D42428] flex-shrink-0" /> : <ArrowRight className="w-6 h-6 text-white/40 flex-shrink-0" />}
+                                    </button>
+
                                     {/* Equipment Selection */}
                                     <div className="space-y-4 mb-8">
                                         {stationTypes.map((station) => {
@@ -779,6 +813,7 @@ const BookingPage: React.FC = () => {
                                                 { value: 2, label: '2 hrs' },
                                                 { value: 2.5, label: '2h 30m' },
                                                 { value: 3, label: '3 hrs' },
+                                                ...(isFullSpace() ? [{ value: 4, label: '4 hrs' }] : []),
                                             ].map(({ value, label }) => (
                                                 <button
                                                     key={value}
@@ -810,6 +845,15 @@ const BookingPage: React.FC = () => {
                                                     );
                                                 })}
                                             </div>
+                                            {partyRateApplies() && (
+                                                <div className="flex justify-between text-sm text-[#D42428] mb-2">
+                                                    <span>Private party rate ({duration} hrs)</span>
+                                                    <span>&minus;${hourlyTotal() - calculateTotal()}</span>
+                                                </div>
+                                            )}
+                                            {isFullSpace() && !partyRateApplies() && (
+                                                <p className="text-xs text-white/50 mb-2">Choose 2 hours or more for the private party rate (${bookingConfig.partyBasePrice} for 2 hours).</p>
+                                            )}
                                             <div className="flex justify-between border-t border-white/10 pt-4">
                                                 <span className="font-bold">Total ({duration}hr session)</span>
                                                 <span className="text-[#2D9E49] font-bold text-xl">${calculateTotal()}</span>

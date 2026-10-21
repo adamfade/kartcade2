@@ -50,8 +50,8 @@ const routes = [
   {
     path: '/events',
     title: 'Birthday Parties & Corporate Events | Kartcade Racing Simulator Lounge',
-    description: 'Host a birthday party, team-building tournament or private buyout on 10 racing and flight simulators in West Linn, Oregon. Parties from $400.',
-    body: `<h1>Birthday parties and private events</h1><p>Birthday parties, corporate team building with tournaments and leaderboards, and private buyouts.</p>`,
+    description: 'Host a birthday party, team-building tournament or private buyout on 10 racing and flight simulators in West Linn, Oregon. Up to 40 guests, $400 for 2 hours.',
+    body: `<h1>Birthday parties and private events</h1><p>Birthday parties, corporate team building with tournaments and leaderboards, and private buyouts. Up to 40 guests: $400 for 2 hours, $200 for each extra hour.</p>`,
   },
   {
     path: '/membership',
