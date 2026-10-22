@@ -90,7 +90,7 @@ const PricingPage: React.FC = () => {
         {
             title: "Birthday Party",
             price: "From $400",
-            description: "2 hours, up to 15 guests (Unlimited racing)",
+            description: "2 hours, up to 40 guests (Unlimited racing). Extra hours $200 each.",
             features: ["Entire facility reservation", "Bring your own cake & decorations", "Staff assistance"]
         },
         {

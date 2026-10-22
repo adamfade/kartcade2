@@ -12,12 +12,15 @@ const eventPackages = [
         price: "Starting at $400 ($720 value)",
         features: [
             "2 hours of racing time",
-            "Up to 15 guests (Unlimited racing)",
+            "Up to 40 guests (Unlimited racing)",
+            "Extra hours $200 each",
             "Entire facility reservation",
             "Bring your own decorations and cake",
             "Staff assistance throughout"
         ],
-        highlight: true
+        highlight: true,
+        link: "/book-party",
+        cta: "Book Your Party"
     },
     {
         icon: <Building2 className="w-10 h-10" />,
@@ -98,7 +101,7 @@ const EventsPage: React.FC = () => {
                     </h1>
                     <p className="event-hero-text text-lg md:text-xl text-white/70 max-w-md leading-relaxed">
                         Kartcade is the perfect venue for birthday parties, corporate team building, bachelor/bachelorette parties.
-                        We can accommodate up to 15 people with our full fleet of 10 simulators.
+                        We can accommodate up to 40 people with our full fleet of 10 simulators.
                     </p>
                 </div>
             </section>
@@ -163,13 +166,13 @@ const EventsPage: React.FC = () => {
                                     ))}
                                 </ul>
                                 <Link
-                                    to="/contact"
+                                    to={(pkg as any).link || "/contact"}
                                     className={`block text-center py-3 rounded-full font-bold uppercase tracking-widest text-sm transition-all ${pkg.highlight
                                         ? 'bg-[#D42428] text-white hover:bg-[#B91C1C]'
                                         : 'border border-white/20 text-white hover:bg-white/5'
                                         }`}
                                 >
-                                    Inquire Now
+                                    {(pkg as any).cta || "Inquire Now"}
                                 </Link>
                             </div>
                         ))}

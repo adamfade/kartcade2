@@ -168,7 +168,7 @@ const SignUpPage: React.FC = () => {
 
                 // 2. Check if party is full
                 const currentGuestCount = partyData.registeredGuests?.length || 0;
-                const maxGuests = partyData.maxGuests || 15;
+                const maxGuests = partyData.maxGuests || 40;
                 if (currentGuestCount >= maxGuests) {
                     throw new Error('This party has reached its maximum guest capacity.');
                 }

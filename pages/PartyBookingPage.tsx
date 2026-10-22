@@ -21,7 +21,7 @@ const PartyBookingPage: React.FC = () => {
 
     // 1. STATE
     const [step, setStep] = useState(1);
-    const [duration, setDuration] = useState(2); // 2, 3, or 4 hours
+    const [duration, setDuration] = useState(2); // 2 hours minimum, $200 per extra hour
     const [paymentAmountType, setPaymentAmountType] = useState<'deposit' | 'full'>('deposit');
     const [selectedDate, setSelectedDate] = useState<Date | null>(null);
     const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -39,7 +39,10 @@ const PartyBookingPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     // 2. CONSTANTS
-    const PARTY_PRICES: Record<number, number> = { 2: 400, 3: 600, 4: 800 };
+    const PARTY_HOURS = [2, 3, 4, 5];
+    const PARTY_PRICES: Record<number, number> = Object.fromEntries(
+        PARTY_HOURS.map(h => [h, bookingConfig.partyBasePrice + (h - bookingConfig.partyMinHours) * bookingConfig.partyExtraHourPrice])
+    );
     const TOTAL_MACHINES = { karts: 4, rigs: 4, motion: 1, flight: 1 };
 
     // 3. EFFECTS
@@ -141,7 +144,7 @@ const PartyBookingPage: React.FC = () => {
         try {
             const totalPrice = PARTY_PRICES[duration];
             const dateStr = selectedDate.toISOString().split('T')[0];
-            const stationPayload = `Karts:5, Rigs:3, Motion:1, Flight:1 (${duration}h)`;
+            const stationPayload = `Karts:4, Rigs:4, Motion:1, Flight:1 (${duration}h)`; // every unit, so nothing stays bookable
 
             // 1. Create booking in Google Sheets via API
             const amountToCharge = paymentAmountType === 'full' ? totalPrice : totalPrice * 0.5;
@@ -177,7 +180,7 @@ const PartyBookingPage: React.FC = () => {
                     totalPrice: totalPrice,
                     depositPaid: amountToCharge,
                     remainingBalance: totalPrice - amountToCharge,
-                    maxGuests: 15,
+                    maxGuests: bookingConfig.partyMaxGuests,
                     registeredGuests: [],
                     status: 'confirmed',
                     source: 'paypal',
@@ -232,7 +235,7 @@ const PartyBookingPage: React.FC = () => {
             const totalPrice = PARTY_PRICES[duration];
             const depositAmount = totalPrice * 0.5;
             const dateStr = selectedDate.toISOString().split('T')[0];
-            const stationPayload = `Karts:5, Rigs:3, Motion:1, Flight:1 (${duration}h)`;
+            const stationPayload = `Karts:4, Rigs:4, Motion:1, Flight:1 (${duration}h)`; // every unit, so nothing stays bookable
 
             // BRANCH: If Pay at Venue (Admin Only)
             if (paymentMethod === 'venue') {
@@ -264,7 +267,7 @@ const PartyBookingPage: React.FC = () => {
                         totalPrice: totalPrice,
                         depositPaid: 0,
                         remainingBalance: totalPrice,
-                        maxGuests: 15,
+                        maxGuests: bookingConfig.partyMaxGuests,
                         registeredGuests: [],
                         status: 'confirmed',
                         source: 'admin_manual',
@@ -373,7 +376,7 @@ const PartyBookingPage: React.FC = () => {
                         Whole Venue <span className="text-[#D42428]">Party</span>
                     </h1>
                     <p className="text-white/60 max-w-2xl mx-auto mb-10 text-sm md:text-base leading-relaxed">
-                        Rent the entire facility for 2 to 4 hours. 10 simulators, private space, and unlimited racing for up to 15 guests.
+                        Rent the entire facility: $400 for 2 hours, $200 for each extra hour. All 10 simulators, private space, and unlimited racing for up to 40 guests.
                     </p>
 
                     <div className="flex items-center justify-center gap-4 sm:gap-8">
@@ -403,8 +406,8 @@ const PartyBookingPage: React.FC = () => {
 
                 {step === 1 && (
                     <div className="space-y-10 animate-in fade-in slide-in-from-bottom-6 duration-500">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            {[2, 3, 4].map((d) => (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                            {PARTY_HOURS.map((d) => (
                                 <button
                                     key={d}
                                     onClick={() => setDuration(d)}

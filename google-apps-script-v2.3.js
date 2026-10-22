@@ -77,12 +77,11 @@ function getEquipmentPrice(equipmentType) {
  * Calculate total cost from station string
  */
 function calculateTotalCost(stationStr) {
-    const isPartyBooking = String(stationStr).indexOf('Karts:5') !== -1 &&
-        String(stationStr).indexOf('Rigs:3') !== -1 &&
-        String(stationStr).indexOf('Motion:1') !== -1 &&
-        String(stationStr).indexOf('Flight:1') !== -1;
-
     const parsed = parseStationString(stationStr);
+    // v2.6: whole-space booking = all 10 units (party page or "Book the entire space"),
+    // in any order or split (old party rows say Karts:5, Rigs:3; new ones Karts:4, Rigs:4)
+    const totalUnits = parsed.equipment.reduce(function (sum, item) { return sum + item.quantity; }, 0);
+    const isPartyBooking = totalUnits >= 10 && parsed.duration >= 2;
 
     if (isPartyBooking) {
         if (parsed.duration === 2) return 400;
