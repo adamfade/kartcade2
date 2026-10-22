@@ -139,7 +139,10 @@ const LeaderboardPage: React.FC = () => {
         );
 
         const unsub = onSnapshot(q, (snap) => {
-            const times = snap.docs.map(d => ({ id: d.id, ...d.data() } as LapTime));
+            const times = snap.docs
+                .map(d => ({ id: d.id, ...d.data() } as LapTime))
+                .map(t => ({ ...t, game: canonicalGame(t.game) || '' }))
+                .filter(t => t.game);
             // Sort locally to ensure premium responsiveness and bypass index requirements
             times.sort((a, b) => a.lapTimeMs - b.lapTimeMs);
             setAllTimes(times);
@@ -729,5 +732,31 @@ const LeaderboardPage: React.FC = () => {
         </div>
     );
 };
+
+// ── Game names ─────────────────────────────────────────────────────────
+// Lap times are typed in by hand, so normalize common misspellings and hide
+// records whose game is not one we run (e.g. a driver's name typed into the game field).
+const KNOWN_GAMES = [
+    'Assetto Corsa', 'Assetto Corsa Competizione', 'Assetto Corsa Rally', 'Automobilista 2',
+    'BeamNG', 'F1 25', 'Grid Legends', 'Le Mans Ultimate',
+];
+const GAME_ALIASES: Record<string, string> = {
+    'asseto corsa': 'Assetto Corsa',
+    'assetto': 'Assetto Corsa',
+    'ac': 'Assetto Corsa',
+    'acc': 'Assetto Corsa Competizione',
+    'beamng.drive': 'BeamNG',
+    'f1': 'F1 25',
+    'grid': 'Grid Legends',
+    'lmu': 'Le Mans Ultimate',
+    'ams2': 'Automobilista 2',
+};
+function canonicalGame(raw: string | undefined): string | null {
+    const g = String(raw || '').trim().replace(/\s+/g, ' ');
+    if (!g) return null;
+    const exact = KNOWN_GAMES.find(k => k.toLowerCase() === g.toLowerCase());
+    if (exact) return exact;
+    return GAME_ALIASES[g.toLowerCase()] || null;
+}
 
 export default LeaderboardPage;
