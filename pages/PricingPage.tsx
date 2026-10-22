@@ -4,6 +4,7 @@ import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { Check, ArrowRight, Gift, Users, Clock, Phone } from 'lucide-react';
 import siteConfig from '../config/site';
+import business, { station, minPrice, maxPrice } from '../config/business';
 
 const PricingPage: React.FC = () => {
     const heroRef = useRef<HTMLDivElement>(null);
@@ -12,7 +13,7 @@ const PricingPage: React.FC = () => {
         document.title = "Pricing | Kartcade Racing Simulator Lounge";
         const metaDesc = document.querySelector('meta[name="description"]');
         if (metaDesc) {
-            metaDesc.setAttribute('content', 'Kartcade pricing: $30-50/hour. Birthday party packages from $400. Book your racing simulator session today.');
+            metaDesc.setAttribute('content', `Kartcade pricing: $${minPrice}-${maxPrice}/hour. Birthday party packages from $${business.party.basePrice}. Book your racing simulator session today.`);
         }
     }, []);
 
@@ -26,8 +27,8 @@ const PricingPage: React.FC = () => {
     const sessionPricing = [
         {
             title: "Racing Karts",
-            subtitle: "Ages 5+ (Kids & Teens)",
-            price: "$30",
+            subtitle: `Ages ${station('karts').ageLabel} (Kids & Teens)`,
+            price: `$${station('karts').price}`,
             period: "/hour",
             features: [
                 "Dedicated racing karts",
@@ -41,8 +42,8 @@ const PricingPage: React.FC = () => {
         },
         {
             title: "Full Sim Rig",
-            subtitle: "Direct Drive (Ages 10+)",
-            price: "$40",
+            subtitle: `Direct Drive (Ages ${station('rigs').ageLabel})`,
+            price: `$${station('rigs').price}`,
             period: "/hour",
             features: [
                 "Professional direct-drive wheels",
@@ -56,8 +57,8 @@ const PricingPage: React.FC = () => {
         },
         {
             title: "Motion Simulator",
-            subtitle: "Full Motion (Ages 14+)",
-            price: "$50",
+            subtitle: `Full Motion (Ages ${station('motion').ageLabel})`,
+            price: `$${station('motion').price}`,
             period: "/hour",
             features: [
                 "Full motion platform",
@@ -71,8 +72,8 @@ const PricingPage: React.FC = () => {
         },
         {
             title: "Flight Simulator",
-            subtitle: "HOTAS Setup (All Ages)",
-            price: "$40",
+            subtitle: `HOTAS Setup (${station('flight').ageLabel})`,
+            price: `$${station('flight').price}`,
             period: "/hour",
             features: [
                 "Detailed flight controls",
@@ -89,8 +90,8 @@ const PricingPage: React.FC = () => {
     const eventPackages = [
         {
             title: "Birthday Party",
-            price: "From $400",
-            description: "2 hours, up to 40 guests (Unlimited racing). Extra hours $200 each.",
+            price: `From $${business.party.basePrice}`,
+            description: `${business.party.minHours} hours, up to ${business.party.maxGuests} guests (Unlimited racing). Extra hours $${business.party.extraHourPrice} each.`,
             features: ["Entire facility reservation", "Bring your own cake & decorations", "Staff assistance"]
         },
         {

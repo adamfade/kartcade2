@@ -1,3 +1,5 @@
+import business, { stations, station, minPrice, weekRows } from "./business";
+
 // Site Configuration - Kartcade Racing Simulator Lounge
 
 export const siteConfig = {
@@ -7,8 +9,8 @@ export const siteConfig = {
   description: "Oregon's premier racing simulator lounge featuring 10 state-of-the-art simulators. Experience racing, drifting, flying and more.",
 
   // Contact
-  email: "info@kartcade.com",
-  phone: "503-490-9194",
+  email: business.email,
+  phone: business.phone,
   whatsapp: "15034909194", // Without + sign, used in wa.me links
 
   // Location
@@ -20,8 +22,8 @@ export const siteConfig = {
 
   // URLs
   siteUrl: "https://www.kartcade.com",
-  giftCardsUrl: "https://giftup.app/place-order/dd0ba2da-46cb-4e33-43c4-08de38bb5f40?platform=hosted",
-  googleMapsUrl: "https://maps.app.goo.gl/KkMsyMYUE1E1H9Z36",
+  giftCardsUrl: business.giftCardsUrl,
+  googleMapsUrl: business.mapsUrl,
 
   // Social (add your social links)
   social: {
@@ -33,8 +35,8 @@ export const siteConfig = {
 
   // Business Info (for structured data)
   business: {
-    priceRange: "$30 - $400+",
-    openingHours: "Wed-Thu 2-8pm, Fri 2-9pm, Sat 10am-9pm, Sun 10am-7pm (closed Mon-Tue)",
+    priceRange: `$${minPrice} - $${business.party.basePrice}+`,
+    openingHours: weekRows.map((r) => `${r.name.slice(0, 3)} ${r.label}`).join(", "),
     areaServed: "West Linn, Oregon",
     languages: ["English"]
   },
@@ -51,21 +53,21 @@ export const siteConfig = {
 
   // Pricing
   pricing: {
-    adultHourly: 40,
-    youthHourly: 30,
-    birthdayPackage: 400,
+    adultHourly: station("rigs").price,
+    youthHourly: station("karts").price,
+    birthdayPackage: business.party.basePrice,
     currency: "$",
   },
 
   // Equipment Stats
   stats: {
-    totalSimulators: 10,
-    racingKarts: 5,
-    fullSizeRigs: 4,
-    motionSimulator: 1,
-    flightSimulator: 1,
-    maxConcurrentDrivers: 10,
-    maxBirthdayGuests: 40,
+    totalSimulators: stations.reduce((n, s) => n + s.units, 0),
+    racingKarts: station("karts").units,
+    fullSizeRigs: station("rigs").units,
+    motionSimulator: station("motion").units,
+    flightSimulator: station("flight").units,
+    maxConcurrentDrivers: stations.reduce((n, s) => n + s.units, 0),
+    maxBirthdayGuests: business.party.maxGuests,
   }
 };
 

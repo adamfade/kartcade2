@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ArrowRight, Phone, Mail, MapPin, Sparkles } from 'lucide-react';
 import bookingConfig from '../config/booking';
+import business, { station } from '../config/business';
 
 const CampaignLandingPage: React.FC = () => {
     const location = useLocation();
@@ -56,7 +57,7 @@ const CampaignLandingPage: React.FC = () => {
         {
             id: 'karts',
             title: "Racing Karts",
-            ageReq: "Ages 5+",
+            ageReq: `Ages ${station('karts').ageLabel}`,
             desc: "Designed for younger drivers and beginners. Casual, fun, and responsive.",
             normalPrice: bookingConfig.stations.karts.price,
             promoPrice: bookingConfig.stations.karts.price / 2,
@@ -66,7 +67,7 @@ const CampaignLandingPage: React.FC = () => {
         {
             id: 'rigs',
             title: "Full-Size Rigs",
-            ageReq: "Ages 10+",
+            ageReq: `Ages ${station('rigs').ageLabel}`,
             desc: "Professional direct-drive steering wheels and high-fidelity load cell pedals.",
             normalPrice: bookingConfig.stations.rigs.price,
             promoPrice: bookingConfig.stations.rigs.price / 2,
@@ -76,7 +77,7 @@ const CampaignLandingPage: React.FC = () => {
         {
             id: 'motion',
             title: "Motion Simulator",
-            ageReq: "Ages 14+",
+            ageReq: `Ages ${station('motion').ageLabel}`,
             desc: "The ultimate ride. Triple screen wrapping with a physical pitch/roll platform.",
             normalPrice: bookingConfig.stations.motion.price,
             promoPrice: bookingConfig.stations.motion.price / 2,
@@ -86,7 +87,7 @@ const CampaignLandingPage: React.FC = () => {
         {
             id: 'flight',
             title: "Flight Simulator",
-            ageReq: "All Ages",
+            ageReq: station('flight').ageLabel,
             desc: "Full HOTAS throttle and flight stick setups. Aerial combat and space flight.",
             normalPrice: bookingConfig.stations.flight.price,
             promoPrice: bookingConfig.stations.flight.price / 2,
@@ -326,7 +327,7 @@ const CampaignLandingPage: React.FC = () => {
                         {/* Space Rental Spec & Call */}
                         <div className="pt-6 border-t border-white/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
                             <div>
-                                <div className="text-2xl font-bold text-white font-display">$400</div>
+                                <div className="text-2xl font-bold text-white font-display">${business.party.basePrice}</div>
                                 <div className="text-[9px] font-bold uppercase tracking-widest text-white/40">
                                     For 2 Hours • Up to 40 Guests
                                 </div>

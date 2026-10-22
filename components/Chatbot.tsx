@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Sparkles, Loader2, Bot } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import business, { stations, weekRows } from '../config/business';
 
 // Initialize Gemini (Client Side for Demo)
 // Note: In production, moving this back to an API route is safer for key protection.
@@ -35,14 +36,16 @@ Most users are new. If they ask "What do you have?", explain cleanly:
 
 **OUR SIMULATORS:**
 
-*   🏎️ **Racing Karts ($30/hr):** Casual fun for kids (5+) & beginners.
-*   🖥️ **Full-Size Rigs ($40/hr):** Pro direct-drive wheels for adults (10+).
-*   🚀 **Motion Sim ($50/hr):** The Ultimate Experience. Moves with the game! (14+).
-*   ✈️ **Flight Sim ($40/hr):** Joystick setup for flying.
+${stations.map((s) => `*   **${s.name} ($${s.price}/hr):** ${s.blurb} (${s.ageLabel}).`).join('\n')}
+
+**OPENING HOURS:**
+${weekRows.map((r) => `- ${r.name}: ${r.label}`).join('\n')}
+
+**PRIVATE PARTIES:** $${business.party.basePrice} for ${business.party.minHours} hours, $${business.party.extraHourPrice} per extra hour, up to ${business.party.maxGuests} guests, whole space.
 
 **BOOKING INSTRUCTIONS:**
 - **MANDATORY:** You MUST ask for **Date AND Time** before creating a link.
-- IF user says "tomorrow" but no time -> Ask "What time would you like? (10am - 10pm)".
+- IF user says "tomorrow" but no time -> Ask what time they would like, within the opening hours above for that day.
 - DO NOT hallucinate a time.
 
 - GENERATE LINK ONLY when you have Date + Time + Station:

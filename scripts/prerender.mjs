@@ -13,26 +13,55 @@ const SITE = 'https://www.kartcade.com';
 const DIST = 'dist';
 const GA_ID = process.env.VITE_GA_ID || '';
 
-const NAP = `<p>Kartcade, 18750 Willamette Dr, West Linn, OR 97068 · <a href="tel:+15034909194">503-490-9194</a> · <a href="/book">Book a session</a></p>
-<p>Hours: Wed and Thu 2pm to 8pm, Fri 2pm to 9pm, Sat 10am to 9pm, Sun 10am to 7pm. Closed Mon and Tue.</p>`;
+// Hours, ages and prices come from config/business.json, the same file the app reads.
+const B = JSON.parse(readFileSync('config/business.json', 'utf8'));
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const fmt = (h) => `${h % 12 === 0 ? 12 : h % 12}${h >= 12 ? 'pm' : 'am'}`;
+const hhmm = (h) => `${String(h).padStart(2, '0')}:00`;
+const ST = Object.fromEntries(B.stations.map((s) => [s.id, s]));
+const MIN_PRICE = Math.min(...B.stations.map((s) => s.price));
+const TOTAL_SIMS = B.stations.reduce((n, s) => n + s.units, 0);
+const ADDR = `${B.address.street}, ${B.address.city}, ${B.address.region} ${B.address.postalCode}`;
+const hoursText = [1, 2, 3, 4, 5, 6, 0]
+  .map((d) => `${DAYS[d].slice(0, 3)} ${B.hours[d] ? `${fmt(B.hours[d][0])} to ${fmt(B.hours[d][1])}` : 'closed'}`)
+  .join(', ');
+
+const NAP = `<p>Kartcade, ${ADDR} · <a href="tel:${B.phoneE164}">${B.phone}</a> · <a href="/book">Book a session</a></p>
+<p>Hours: ${hoursText}.</p>`;
+
+// Structured data for Google: opening hours and offers, generated from the same file.
+const ldHours = [];
+for (const d of [3, 4, 5, 6, 0, 1, 2]) {
+  const h = B.hours[d];
+  if (!h) continue;
+  const same = ldHours.find((x) => x.opens === hhmm(h[0]) && x.closes === hhmm(h[1]));
+  if (same) same.dayOfWeek.push(DAYS[d]);
+  else ldHours.push({ '@type': 'OpeningHoursSpecification', dayOfWeek: [DAYS[d]], opens: hhmm(h[0]), closes: hhmm(h[1]) });
+}
+const ldBlock = `"priceRange": "$${MIN_PRICE} - $${B.party.basePrice}+",
+    "openingHoursSpecification": ${JSON.stringify(ldHours)},
+    "makesOffer": ${JSON.stringify([
+      ...B.stations.map((s) => ({ '@type': 'Offer', name: `${s.name} (${s.ageLabel === 'All ages' ? 'all ages' : `ages ${s.ageLabel}`})`, price: String(s.price), priceCurrency: 'USD', unitText: 'per person per hour' })),
+      { '@type': 'Offer', name: `Private party, whole space (${B.party.minHours} hours, up to ${B.party.maxGuests} guests)`, price: String(B.party.basePrice), priceCurrency: 'USD' },
+    ])}`;
 
 const routes = [
   {
     path: '/',
     title: 'Kartcade | Racing & Flight Simulator Lounge | West Linn, Oregon',
-    description: "Oregon's first racing and flight simulator lounge. 10 simulators, from kid-friendly karts to a full-motion rig. Walk in or book online in West Linn, near Lake Oswego and Portland.",
+    description: "Oregon's first racing and flight simulator lounge. ${TOTAL_SIMS} simulators, from kid-friendly karts to a full-motion rig. Walk in or book online in West Linn, near Lake Oswego and Portland.",
     body: `<h1>Kartcade: Oregon's first racing and flight simulator lounge</h1>
-<p>Race head-to-head on 10 networked simulators, or fly anywhere in the world in Microsoft Flight Simulator. No experience needed. Ages 5 and up.</p>
+<p>Race head-to-head on ${TOTAL_SIMS} networked simulators, or fly anywhere in the world in Microsoft Flight Simulator. No experience needed. Ages ${ST.karts.minAge} and up.</p>
 <ul><li>Racing karts for kids and teens</li><li>Direct-drive full sim rigs</li><li>Full-motion simulator</li><li>Flight simulator with HOTAS controls</li></ul>
 <p>Hourly sessions, birthday parties, corporate team building and private events, 20 minutes from downtown Portland.</p>`,
   },
   {
     path: '/pricing',
-    title: 'Pricing | Racing Simulator Sessions from $30/hr | Kartcade West Linn',
-    description: 'Racing karts $30/hr, full sim rigs $40/hr, flight sim $40/hr, motion simulator $50/hr. Priced per person, everyone gets their own rig. Birthday parties from $400.',
+    title: `Pricing | Racing Simulator Sessions from $${MIN_PRICE}/hr | Kartcade West Linn`,
+    description: `Racing karts $${ST.karts.price}/hr, full sim rigs $${ST.rigs.price}/hr, flight sim $${ST.flight.price}/hr, motion simulator $${ST.motion.price}/hr. Priced per person, everyone gets their own rig. Birthday parties from $${B.party.basePrice}.`,
     body: `<h1>Kartcade pricing</h1>
 <p>Pricing is per person per hour. Everyone in your group gets their own simulator, so nobody waits for a turn.</p>
-<ul><li>Racing Karts (ages 5+): $30/hour</li><li>Full Sim Rig, direct drive (ages 10+): $40/hour</li><li>Motion Simulator (ages 14+): $50/hour</li><li>Flight Simulator (all ages): $40/hour</li><li>Birthday parties: from $400</li><li>Corporate events: custom quotes</li></ul>`,
+<ul><li>Racing Karts (ages ${ST.karts.ageLabel}): $${ST.karts.price}/hour</li><li>Full Sim Rig, direct drive (ages ${ST.rigs.ageLabel}): $${ST.rigs.price}/hour</li><li>Motion Simulator (ages ${ST.motion.ageLabel}): $${ST.motion.price}/hour</li><li>Flight Simulator (all ages): $${ST.flight.price}/hour</li><li>Private parties, whole space: $${B.party.basePrice} for ${B.party.minHours} hours, $${B.party.extraHourPrice} per extra hour, up to ${B.party.maxGuests} guests</li><li>Corporate events: custom quotes</li></ul>`,
   },
   {
     path: '/experiences',
@@ -50,8 +79,8 @@ const routes = [
   {
     path: '/events',
     title: 'Birthday Parties & Corporate Events | Kartcade Racing Simulator Lounge',
-    description: 'Host a birthday party, team-building tournament or private buyout on 10 racing and flight simulators in West Linn, Oregon. Up to 40 guests, $400 for 2 hours.',
-    body: `<h1>Birthday parties and private events</h1><p>Birthday parties, corporate team building with tournaments and leaderboards, and private buyouts. Up to 40 guests: $400 for 2 hours, $200 for each extra hour.</p>`,
+    description: `Host a birthday party, team-building tournament or private buyout on ${TOTAL_SIMS} racing and flight simulators in West Linn, Oregon. Up to ${B.party.maxGuests} guests, $${B.party.basePrice} for ${B.party.minHours} hours.`,
+    body: `<h1>Birthday parties and private events</h1><p>Birthday parties, corporate team building with tournaments and leaderboards, and private buyouts. Up to ${B.party.maxGuests} guests: $${B.party.basePrice} for ${B.party.minHours} hours, $${B.party.extraHourPrice} for each extra hour.</p>`,
   },
   {
     path: '/membership',
@@ -104,7 +133,8 @@ const gaSnippet = GA_ID
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA_ID}');</script>`
   : '';
 
-const template = readFileSync(join(DIST, 'index.html'), 'utf8');
+const template = readFileSync(join(DIST, 'index.html'), 'utf8').replace(/"priceRange"[\s\S]*?"makesOffer": \[[\s\S]*?\n    \]/, ldBlock);
+if (!template.includes('"openingHoursSpecification": [{')) throw new Error('prerender: could not regenerate JSON-LD hours from config/business.json');
 
 // Untouched SPA shell for every other route (booking, login, checkout, equipment details).
 writeFileSync(join(DIST, 'app.html'), template.replace('</head>', `  ${gaSnippet}\n</head>`));

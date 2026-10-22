@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useGSAP } from '@gsap/react';
+import { station } from '../config/business';
 
 const simulators = [
   {
@@ -9,7 +10,7 @@ const simulators = [
     title: "Racing Karts",
     subtitle: "5 Units Available",
     description: "Designed for younger drivers and anyone under about 6'3\". Comfortable seating positions and adjusted controls make them perfect for kids, teens, and beginners who want the full racing experience.",
-    bestFor: "Ages 5+, teens, smaller adults, beginners",
+    bestFor: `Ages ${station('karts').ageLabel}, teens, smaller adults, beginners`,
     image: "/images/kartcade/karts.webp"
   },
   {
@@ -25,7 +26,7 @@ const simulators = [
     title: "Motion Simulator",
     subtitle: "1 Unit - The Crown Jewel",
     description: "Three screens wrap around you for incredible immersion, plus a motion platform that physically moves with the action. Feel every bump, drift, and collision as the simulator pitches, rolls, and vibrates.",
-    bestFor: "Ages 12+, ultimate experience, special occasions",
+    bestFor: `Ages ${station('motion').ageLabel}, ultimate experience, special occasions`,
     image: "/images/kartcade/motion_home.webp"
   },
   {

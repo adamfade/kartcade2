@@ -4,16 +4,17 @@ import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { Calendar, Users, Trophy, Gift, Phone, ArrowRight, Cake, Building2, Gamepad2, ArrowUpRight } from 'lucide-react';
 import siteConfig from '../config/site';
+import business from '../config/business';
 
 const eventPackages = [
     {
         icon: <Cake className="w-10 h-10" />,
         title: "Birthday Party Package",
-        price: "Starting at $400 ($720 value)",
+        price: `Starting at $${business.party.basePrice}`,
         features: [
-            "2 hours of racing time",
+            `${business.party.minHours} hours of racing time`,
             "Up to 40 guests (Unlimited racing)",
-            "Extra hours $200 each",
+            `Extra hours $${business.party.extraHourPrice} each`,
             "Entire facility reservation",
             "Bring your own decorations and cake",
             "Staff assistance throughout"

@@ -1,3 +1,4 @@
+import { station } from './business';
 // ─── Equipment Detail Pages Data ─────────────────────────────────────────────
 // Used by EquipmentDetailPage.tsx to render individual landing pages.
 
@@ -388,7 +389,7 @@ export const equipmentData: EquipmentItem[] = [
     {
         id: 'karts',
         title: 'Racing Karts',
-        subtitle: '5 Units — Ages 5+',
+        subtitle: `${station('karts').units} Units — Ages ${station('karts').ageLabel}`,
         heroImage: '/images/equipment/Karts/IMG_7899.webp',
         price: 30,
         priceUnit: 'per person / hour',
@@ -453,7 +454,7 @@ export const equipmentData: EquipmentItem[] = [
                         heading: 'BEST FOR',
                         subheading: 'Who It Suits',
                         items: [
-                            { label: 'Age', value: 'Ages 5+' },
+                            { label: 'Age', value: `Ages ${station('karts').ageLabel}` },
                             { label: 'Height', value: '4\'0" minimum' },
                             { label: 'Experience', value: 'All levels, beginner-friendly' },
                         ],
@@ -499,7 +500,7 @@ export const equipmentData: EquipmentItem[] = [
                         heading: 'BEST FOR',
                         subheading: 'Who It Suits',
                         items: [
-                            { label: 'Age', value: 'Ages 5+' },
+                            { label: 'Age', value: `Ages ${station('karts').ageLabel}` },
                             { label: 'Height', value: '4\'0" minimum' },
                             { label: 'Experience', value: 'All levels, beginner-friendly' },
                         ],

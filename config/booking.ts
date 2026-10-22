@@ -5,6 +5,8 @@
 // after deploying the script
 // ============================================================
 
+import business, { station, hoursByDay, earliestOpen, latestClose } from './business';
+
 export const bookingConfig = {
     // ✅ LIVE - Connected to kartcade.website@gmail.com Google Sheets
     API_URL: 'https://script.google.com/macros/s/AKfycbzlJM7zscm9Txy-5Q2MLqoqDtzbab6a0L-CtUWIRUWrN0Bo8b-GGK51iuDa6hQOBpV5UA/exec',
@@ -12,74 +14,36 @@ export const bookingConfig = {
     // PayPal Configuration
     paypalClientId: import.meta.env.VITE_PAYPAL_CLIENT_ID,
 
-    // Station types and their properties
+    // Prices, units, ages, hours and party pricing come from config/business.json (one source of truth).
     stations: {
-        karts: {
-            id: 'karts',
-            name: 'Racing Karts',
-            price: 30,
-            units: 4,
-            description: 'Perfect for kids 5+, teens, and adults under 6\'3"',
-            ageReq: '5+',
-            color: '#2D9E49',
-            maxPerBooking: 4
-        },
-        rigs: {
-            id: 'rigs',
-            name: 'Full-Size Rigs',
-            price: 40,
-            units: 4,
+        karts: { id: 'karts', name: station('karts').name, price: station('karts').price, units: station('karts').units,
+            description: `Perfect for kids ${station('karts').ageLabel}, teens, and adults under 6'3"`,
+            ageReq: station('karts').ageLabel, color: '#2D9E49', maxPerBooking: station('karts').units },
+        rigs: { id: 'rigs', name: station('rigs').name, price: station('rigs').price, units: station('rigs').units,
             description: 'Professional direct-drive simulators for adults',
-            ageReq: '10+',
-            color: '#FFFFFF',
-            maxPerBooking: 4
-        },
-        motion: {
-            id: 'motion',
-            name: 'Motion Simulator',
-            price: 50,
-            units: 1,
+            ageReq: station('rigs').ageLabel, color: '#FFFFFF', maxPerBooking: station('rigs').units },
+        motion: { id: 'motion', name: station('motion').name, price: station('motion').price, units: station('motion').units,
             description: 'Triple-screen with motion platform - the ultimate experience',
-            ageReq: '14+',
-            color: '#D42428',
-            maxPerBooking: 1
-        },
-        flight: {
-            id: 'flight',
-            name: 'Flight Simulator',
-            price: 40,
-            units: 1,
+            ageReq: station('motion').ageLabel, color: '#D42428', maxPerBooking: station('motion').units },
+        flight: { id: 'flight', name: station('flight').name, price: station('flight').price, units: station('flight').units,
             description: 'HOTAS setup for Star Wars Squadrons and more',
-            ageReq: 'All ages',
-            color: '#2D9E49',
-            maxPerBooking: 1
-        }
+            ageReq: station('flight').ageLabel, color: '#2D9E49', maxPerBooking: station('flight').units },
     },
 
-    // Operating hours
-    openHour: 10,   // earliest opening across the week
-    closeHour: 21,  // latest closing across the week
-    // Opening hours by weekday (0 = Sunday), [open, close) in 24h. null = closed.
-    // Keep in sync with HOURS_BY_DAY in the booking Apps Script.
-    hoursByDay: {
-        0: [10, 19],
-        1: null,
-        2: null,
-        3: [14, 20],
-        4: [14, 20],
-        5: [14, 21],
-        6: [10, 21],
-    } as Record<number, [number, number] | null>,
+    // Operating hours. Keep HOURS_BY_DAY in the booking Apps Script in sync with business.json.
+    openHour: earliestOpen,
+    closeHour: latestClose,
+    hoursByDay,
 
-    // Private party / whole-space pricing: $400 for the first 2 hours, $200 for each extra hour.
-    partyMinHours: 2,
-    partyBasePrice: 400,
-    partyExtraHourPrice: 200,
-    partyMaxGuests: 40,
+    // Private party / whole-space pricing.
+    partyMinHours: business.party.minHours,
+    partyBasePrice: business.party.basePrice,
+    partyExtraHourPrice: business.party.extraHourPrice,
+    partyMaxGuests: business.party.maxGuests,
 
     // Booking rules
-    minAdvanceHours: 8, // Minimum hours in advance to book (8h notice required)
-    maxAdvanceDays: 56, // Maximum days in advance to book (8 weeks)
+    minAdvanceHours: business.booking.minAdvanceHours,
+    maxAdvanceDays: business.booking.maxAdvanceDays,
 
     // Admin emails (can see 'Pay at Venue')
     adminEmails: ['kartcade.website@gmail.com', 'adamjames9@gmail.com', 'info@kartcade.com'],

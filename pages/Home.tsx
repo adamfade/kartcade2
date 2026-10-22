@@ -1,13 +1,9 @@
 import React, { useEffect } from 'react';
 
-// Kartcade Homepage Components
+// Kartcade homepage: the existing hero, then the "Broadcast" sections (design proposal A).
 import Hero from '../components/Hero';
-import Intro from '../components/Intro';
-import Services from '../components/Services';
-import Process from '../components/Process';
-import VideoShowcase from '../components/VideoShowcase';
-import WhyChooseUs from '../components/WhyChooseUs';
-import CTASection from '../components/CTASection';
+import Broadcast from '../components/home/Broadcast';
+import { stations } from '../config/business';
 
 const Home: React.FC = () => {
   useEffect(() => {
@@ -15,7 +11,8 @@ const Home: React.FC = () => {
 
     const metaDesc = document.querySelector('meta[name="description"]');
     if (metaDesc) {
-      metaDesc.setAttribute('content', 'Oregon\'s premier racing simulator lounge. 10 simulators, 40+ games. Race, fly, win. Birthday parties, corporate events, and walk-ins welcome. Book your session today!');
+      const total = stations.reduce((n, s) => n + s.units, 0);
+      metaDesc.setAttribute('content', `Oregon's first racing and flight simulator lounge. ${total} simulators, your whole group races at once. Birthday parties, corporate events, and walk-ins welcome. Book your session today!`);
     }
 
     return () => {
@@ -24,27 +21,9 @@ const Home: React.FC = () => {
   }, []);
 
   return (
-    <div className="relative bg-[#0A0A0A]">
-      {/* Hero Section */}
+    <div className="relative bg-black">
       <Hero />
-
-      {/* Intro - Not Just Sim Racing */}
-      <Intro />
-
-      {/* Equipment Showcase */}
-      <Services />
-
-      {/* Video Showcase */}
-      <VideoShowcase />
-
-      {/* How It Works */}
-      <Process />
-
-      {/* Why Kartcade */}
-      <WhyChooseUs />
-
-      {/* Ready to Race CTA */}
-      <CTASection />
+      <Broadcast />
     </div>
   );
 };

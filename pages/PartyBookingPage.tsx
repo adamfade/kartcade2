@@ -13,6 +13,7 @@ import { formatCurrency } from '../utils/paymentStatus';
 import CalendarPicker from '../components/CalendarPicker';
 import PayPalCheckout from '../components/PayPalCheckout';
 import gsap from 'gsap';
+import business from '../config/business';
 
 const PartyBookingPage: React.FC = () => {
     const navigate = useNavigate();
@@ -43,7 +44,7 @@ const PartyBookingPage: React.FC = () => {
     const PARTY_PRICES: Record<number, number> = Object.fromEntries(
         PARTY_HOURS.map(h => [h, bookingConfig.partyBasePrice + (h - bookingConfig.partyMinHours) * bookingConfig.partyExtraHourPrice])
     );
-    const TOTAL_MACHINES = { karts: 4, rigs: 4, motion: 1, flight: 1 };
+    const TOTAL_MACHINES = Object.fromEntries(business.stations.map((s) => [s.id, s.units])) as Record<string, number>;
 
     // 3. EFFECTS
     useEffect(() => {
@@ -376,7 +377,7 @@ const PartyBookingPage: React.FC = () => {
                         Whole Venue <span className="text-[#D42428]">Party</span>
                     </h1>
                     <p className="text-white/60 max-w-2xl mx-auto mb-10 text-sm md:text-base leading-relaxed">
-                        Rent the entire facility: $400 for 2 hours, $200 for each extra hour. All 10 simulators, private space, and unlimited racing for up to 40 guests.
+                        Rent the entire facility: ${business.party.basePrice} for {business.party.minHours} hours, ${business.party.extraHourPrice} for each extra hour. All {Object.values(TOTAL_MACHINES).reduce((a, b) => a + b, 0)} simulators, private space, and unlimited racing for up to {business.party.maxGuests} guests.
                     </p>
 
                     <div className="flex items-center justify-center gap-4 sm:gap-8">

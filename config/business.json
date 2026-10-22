@@ -1,0 +1,27 @@
+{
+  "_note": "Single source of truth for Kartcade's public facts. The website, booking page, pricing, FAQ, events, prerendered pages and Google structured data all read this file. The booking Apps Script keeps its own copy of the hours (HOURS_BY_DAY) and prices (Settings sheet): change those too.",
+  "name": "Kartcade",
+  "phone": "503-490-9194",
+  "phoneE164": "+15034909194",
+  "email": "info@kartcade.com",
+  "address": { "street": "18750 Willamette Dr", "city": "West Linn", "region": "OR", "postalCode": "97068", "country": "US" },
+  "mapsUrl": "https://maps.app.goo.gl/KkMsyMYUE1E1H9Z36",
+  "giftCardsUrl": "https://giftup.app/place-order/dd0ba2da-46cb-4e33-43c4-08de38bb5f40?platform=hosted",
+  "hours": {
+    "0": [10, 19],
+    "1": null,
+    "2": null,
+    "3": [14, 20],
+    "4": [14, 20],
+    "5": [14, 21],
+    "6": [10, 21]
+  },
+  "stations": [
+    { "id": "karts",  "name": "Racing Karts",     "shortName": "Karts",  "price": 30, "units": 4, "minAge": 5,  "ageLabel": "5+",       "blurb": "Kids, teens, beginners" },
+    { "id": "rigs",   "name": "Full-Size Rigs",   "shortName": "Rigs",   "price": 40, "units": 4, "minAge": 10, "ageLabel": "10+",      "blurb": "Direct drive, load-cell pedals" },
+    { "id": "motion", "name": "Motion Simulator", "shortName": "Motion", "price": 50, "units": 1, "minAge": 14, "ageLabel": "14+",      "blurb": "Moves with the car" },
+    { "id": "flight", "name": "Flight Simulator", "shortName": "Flight", "price": 40, "units": 1, "minAge": 0,  "ageLabel": "All ages", "blurb": "Stick and throttle" }
+  ],
+  "party": { "minHours": 2, "basePrice": 400, "extraHourPrice": 200, "maxGuests": 40, "maxHours": 5 },
+  "booking": { "minAdvanceHours": 8, "maxAdvanceDays": 56 }
+}

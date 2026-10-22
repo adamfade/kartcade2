@@ -60,10 +60,13 @@ const Hero: React.FC = () => {
           muted
           loop
           playsInline
-          poster="/images/kartcade/hero.png"
+          preload="auto"
+          poster="/hero-poster.jpg"
           className="w-full h-full object-cover opacity-50"
         >
-          <source src="/hero-bg.mp4" type="video/mp4" />
+          {/* Same footage: 1.7 MB phone cut, 3.5 MB desktop cut, both faststart */}
+          <source src="/hero-mobile.mp4" type="video/mp4" media="(max-width: 767px)" />
+          <source src="/hero.mp4" type="video/mp4" />
         </video>
         {/* Fallback image if video doesn't load */}
         {/* Fallback image removed as per user request to prioritize video */}
@@ -98,6 +101,14 @@ const Hero: React.FC = () => {
           <span className="text-center font-medium">Oregon's Premier Simulator Lounge</span>
           <span className="w-10 sm:w-16 h-[1px] bg-gradient-to-r from-transparent via-[#D42428] to-transparent"></span>
         </div>
+
+        {/* Phones: book straight from the hero */}
+        <Link
+          to="/book"
+          className="md:hidden mt-8 inline-flex items-center justify-center min-h-[52px] px-8 rounded-md bg-[#D42428] text-white font-bold text-base tracking-wide hero-text-char"
+        >
+          Book a rig
+        </Link>
 
         {/* Stats Row */}
         <div className="mt-10 sm:mt-16 flex items-center gap-6 sm:gap-12 md:gap-16 hero-text-char">

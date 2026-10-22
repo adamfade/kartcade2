@@ -1,3 +1,4 @@
+import { station } from '../config/business';
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import gsap from 'gsap';
@@ -20,42 +21,42 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 const stationTypes = [
     {
         id: 'karts',
-        name: 'Racing Karts',
-        price: 30,
-        units: 4,
+        name: station('karts').name,
+        price: station('karts').price,
+        units: station('karts').units,
         icon: <Gauge className="w-8 h-8" />,
-        description: 'Perfect for kids 5+, teens, and adults under 6\'3"',
-        ageReq: '5+',
+        description: `Perfect for kids ${station('karts').ageLabel}, teens, and adults under 6'3"`,
+        ageReq: station('karts').ageLabel,
         color: '#2D9E49'
     },
     {
         id: 'rigs',
-        name: 'Full-Size Rigs',
-        price: 40,
-        units: 4,
+        name: station('rigs').name,
+        price: station('rigs').price,
+        units: station('rigs').units,
         icon: <Monitor className="w-8 h-8" />,
         description: 'Professional direct-drive simulators for adults',
-        ageReq: '10+',
+        ageReq: station('rigs').ageLabel,
         color: '#FFFFFF'
     },
     {
         id: 'motion',
-        name: 'Motion Simulator',
-        price: 50,
-        units: 1,
+        name: station('motion').name,
+        price: station('motion').price,
+        units: station('motion').units,
         icon: <Zap className="w-8 h-8" />,
         description: 'Triple-screen with motion platform - the ultimate experience',
-        ageReq: '14+',
+        ageReq: station('motion').ageLabel,
         color: '#D42428'
     },
     {
         id: 'flight',
-        name: 'Flight Simulator',
-        price: 40,
-        units: 1,
+        name: station('flight').name,
+        price: station('flight').price,
+        units: station('flight').units,
         icon: <Plane className="w-8 h-8" />,
         description: 'HOTAS setup for Star Wars Squadrons and more',
-        ageReq: 'All ages',
+        ageReq: station('flight').ageLabel,
         color: '#2D9E49'
     }
 ];

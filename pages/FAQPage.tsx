@@ -4,6 +4,7 @@ import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { ChevronDown, Phone, Mail, ArrowRight } from 'lucide-react';
 import siteConfig from '../config/site';
+import { station } from '../config/business';
 
 const faqCategories = [
     {
@@ -32,7 +33,7 @@ const faqCategories = [
         questions: [
             {
                 q: "What's the minimum age?",
-                a: "We recommend ages 8 and up for the racing karts, and ages 10+ for the full-size rigs. The motion simulator is recommended for ages 12+ due to intensity. All minors must be accompanied by a parent or guardian."
+                a: `Racing karts are for ages ${station('karts').ageLabel}, the full-size rigs for ages ${station('rigs').ageLabel}, and the motion simulator for ages ${station('motion').ageLabel} due to intensity. The flight simulator is for all ages. All minors must be accompanied by a parent or guardian.`
             },
             {
                 q: "Is there a height requirement?",
@@ -91,7 +92,7 @@ const faqCategories = [
         questions: [
             {
                 q: "How does pricing work?",
-                a: "Pricing is per person, not per simulator. This means everyone in your group gets their own rig to race simultaneously—no taking turns! Rates start at $30/hour on the racing karts and $40/hour on the full sim rigs."
+                a: `Pricing is per person, not per simulator. This means everyone in your group gets their own rig to race simultaneously—no taking turns! Rates start at $${station('karts').price}/hour on the racing karts and $${station('rigs').price}/hour on the full sim rigs.`
             },
             {
                 q: "What's included in my session?",

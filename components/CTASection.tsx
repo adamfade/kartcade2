@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Phone, Gift } from 'lucide-react';
 import siteConfig from '../config/site';
+import { minPrice, maxPrice } from '../config/business';
 
 const CTASection: React.FC = () => {
   return (
@@ -51,7 +52,7 @@ const CTASection: React.FC = () => {
         {/* Quick Info */}
         <div className="mt-12 sm:mt-20 flex flex-wrap justify-center gap-6 sm:gap-8 md:gap-16 text-center">
           <div>
-            <div className="text-xl sm:text-3xl font-bold text-white">$30-50</div>
+            <div className="text-xl sm:text-3xl font-bold text-white">${minPrice}-{maxPrice}</div>
             <div className="text-[10px] sm:text-xs uppercase tracking-widest text-white/40 mt-1">per hour</div>
           </div>
           <div className="w-[1px] h-10 sm:h-12 bg-white/20 hidden sm:block"></div>
