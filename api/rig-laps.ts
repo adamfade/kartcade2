@@ -49,7 +49,11 @@ async function findUser(email: string) {
 export default async function handler(req: any, res: any) {
     res.setHeader('Cache-Control', 'no-store');
     if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
-    if (!keyOk(String(req.headers['x-rig-key'] || ''))) return res.status(401).json({ ok: false, error: 'bad rig key' });
+    const given = String(req.headers['x-rig-key'] || '');
+    if (!keyOk(given)) {
+        console.warn(JSON.stringify({ rigLaps: 'bad rig key', keySet: !!process.env.RIG_KEY, givenLen: given.length, expectedLen: (process.env.RIG_KEY || '').length }));
+        return res.status(401).json({ ok: false, error: 'bad rig key' });
+    }
 
     const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const lapTimeMs = Math.round(Number(b.lapTimeMs));
@@ -57,6 +61,7 @@ export default async function handler(req: any, res: any) {
     const driverName = clean(b.driverName, 40);
     const equipment = EQUIPMENT.has(b.equipment) ? b.equipment : 'rigs';
 
+    console.log(JSON.stringify({ rigLaps: 'received', rigId: clean(b.rigId, 20), lapTimeMs, final: !!b.final }));
     if (!sessionId || driverName.length < 2) return res.status(400).json({ ok: false, error: 'missing session or name' });
     if (!Number.isFinite(lapTimeMs) || lapTimeMs < 10_000 || lapTimeMs > 20 * 60_000) {
         return res.status(400).json({ ok: false, error: 'lap time out of range' });
@@ -95,6 +100,7 @@ export default async function handler(req: any, res: any) {
             }, { merge: true });
         });
 
+        console.log(JSON.stringify({ rigLaps: 'saved', doc: ref.id, linked: !!user }));
         return res.status(200).json({ ok: true, linked: !!user });
     } catch (err: any) {
         console.error('rig-laps failed:', err?.message);
