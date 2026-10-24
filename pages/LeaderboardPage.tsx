@@ -33,6 +33,9 @@ interface LapTime {
     submittedAt: Timestamp;
     competitionWins?: { daily: number; weekly: number; monthly: number; total: number };
     challengeId?: string | null;
+    source?: string;
+    updatedAt?: Timestamp;
+    bestAt?: Timestamp;
 }
 
 interface Competition {
@@ -80,6 +83,16 @@ const EquipmentIcon = ({ type, size = 14 }: { type: string; size?: number }) => 
     if (type === 'flight') return <Gauge {...props} />;
     return <Gauge {...props} />;
 };
+
+/** When the lap was set: the moment the best lap improved (rig laps), else when it was submitted. */
+function lapDate(t: { bestAt?: any; submittedAt?: any }): string {
+    const v = t.bestAt || t.submittedAt;
+    if (!v) return '';
+    const d = v instanceof Timestamp ? v.toDate() : typeof v?.toDate === 'function' ? v.toDate() : new Date(v);
+    if (isNaN(d.getTime())) return '';
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString('en-US', sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 function getPeriodBounds(type: CompetitionFilter, offset: number = 0): { start: Date; end: Date } | null {
     if (type === 'all') return null;
@@ -139,7 +152,10 @@ const LeaderboardPage: React.FC = () => {
         );
 
         const unsub = onSnapshot(q, (snap) => {
-            const times = snap.docs.map(d => ({ id: d.id, ...d.data() } as LapTime));
+            const times = snap.docs
+                .map(d => ({ id: d.id, ...d.data() } as LapTime))
+                .map(t => ({ ...t, game: canonicalGame(t.game) || '' }))
+                .filter(t => t.game);
             // Sort locally to ensure premium responsiveness and bypass index requirements
             times.sort((a, b) => a.lapTimeMs - b.lapTimeMs);
             setAllTimes(times);
@@ -208,7 +224,8 @@ const LeaderboardPage: React.FC = () => {
             const activeComp = competitionFilter === 'daily' ? activeDaily : competitionFilter === 'weekly' ? activeWeekly : activeMonthly;
 
             // Use strict challenge filter ONLY for current period (offset 0) if a challenge exists
-            if (periodOffset === 0 && activeComp) {
+            // Rig laps (Lap Timer app) carry no challenge id; they count by date instead.
+            if (periodOffset === 0 && activeComp && t.source !== 'rig') {
                 if (t.challengeId !== activeComp.id) return false;
             } else {
                 // For historical periods or if no active challenge, use date range bounds
@@ -226,8 +243,19 @@ const LeaderboardPage: React.FC = () => {
         return true;
     });
 
+    // ── One row per driver per game / track / car: their fastest lap ──────
+    const driverKey = (t: LapTime) => t.userId ? `u:${t.userId}` : `n:${(t.driverName || '').trim().toLowerCase()}`;
+    const norm = (v: string | undefined) => (v || '').trim().toLowerCase();
+    const bestByDriver = new Map<string, LapTime>();
+    for (const t of filteredTimes) {
+        const k = [driverKey(t), t.game, norm(t.track), norm(t.car)].join('|');
+        const cur = bestByDriver.get(k);
+        if (!cur || t.lapTimeMs < cur.lapTimeMs) bestByDriver.set(k, t);
+    }
+    const bestTimes = [...bestByDriver.values()];
+
     // ── Sorting ───────────────────────────────────────────────────────────
-    const sorted = [...filteredTimes].sort((a, b) => {
+    const sorted = [...bestTimes].sort((a, b) => {
         const valA = a[sortKey];
         const valB = b[sortKey];
 
@@ -265,10 +293,30 @@ const LeaderboardPage: React.FC = () => {
     };
 
     // ── Default View Automation ───────────────────────────────────────────
+    // Open on today's best laps: the game and track driven most recently today, fastest first.
+    // No laps yet today: all-time view.
     useEffect(() => {
-        if (!loading && !filterGame && !filterTrack) {
+        if (loading || filterGame || filterTrack) return;
+        const bounds = getPeriodBounds('daily', 0)!;
+        const when = (t: LapTime) => {
+            const v: any = t.updatedAt || t.submittedAt;
+            if (!v) return null;
+            const d = v instanceof Timestamp ? v.toDate() : new Date(v);
+            return isNaN(d.getTime()) ? null : d;
+        };
+        const today = allTimes
+            .map(t => ({ t, d: when(t) }))
+            .filter(x => x.d && x.d >= bounds.start && x.d <= bounds.end)
+            .sort((a, b) => b.d!.getTime() - a.d!.getTime());
+        setSortKey('lapTimeMs');
+        setSortDir('asc');
+        setPeriodOffset(0);
+        if (today.length && today[0].t.game) {
+            setCompetitionFilter('daily');
+            setFilterGame(today[0].t.game);
+            if (today[0].t.track) setFilterTrack(today[0].t.track);
+        } else {
             setCompetitionFilter('all');
-            setPeriodOffset(0);
         }
     }, [loading]);
 
@@ -440,9 +488,9 @@ const LeaderboardPage: React.FC = () => {
             ) : (
                 <div className="rounded-2xl border border-white/10 overflow-hidden">
                     <div className="overflow-x-auto overflow-y-auto max-h-[60vh] custom-scrollbar">
-                        <div className={`min-w-[920px] ${isAdmin ? 'min-w-[960px]' : ''}`}>
+                        <div className={`min-w-[1010px] ${isAdmin ? 'min-w-[1050px]' : ''}`}>
                         {/* Table Header */}
-                        <div className={`sticky top-0 z-10 grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px]'} gap-3 px-5 py-3 bg-[#141414] border-b border-white/10 text-[10px] uppercase tracking-widest text-white/30`}>
+                        <div className={`sticky top-0 z-10 grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px]'} gap-3 px-5 py-3 bg-[#141414] border-b border-white/10 text-[10px] uppercase tracking-widest text-white/30`}>
                             <div className="text-center">#</div>
                             <button className="text-left hover:text-white/60 transition-colors" onClick={() => toggleSort('driverName')}>
                                 Driver <SortIcon k="driverName" />
@@ -455,6 +503,7 @@ const LeaderboardPage: React.FC = () => {
                             </button>
                             <div>Track</div>
                             <div>Car</div>
+                            <div>Date</div>
                             <button className="text-right hover:text-white/60 transition-colors" onClick={() => toggleSort('lapTimeMs')}>
                                 Lap Time <SortIcon k="lapTimeMs" />
                             </button>
@@ -472,7 +521,7 @@ const LeaderboardPage: React.FC = () => {
                                 return (
                                     <div
                                         key={entry.id}
-                                        className={`grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px]'} gap-3 px-5 py-4 items-center border-b border-white/5 transition-colors hover:bg-white/[0.02] ${isTop3 ? 'bg-white/[0.01]' : ''}`}
+                                        className={`grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px]'} gap-3 px-5 py-4 items-center border-b border-white/5 transition-colors hover:bg-white/[0.02] ${isTop3 ? 'bg-white/[0.01]' : ''}`}
                                     >
                                         <div className={`font-display font-bold text-center text-lg ${isTop3 ? rankColors[i] : 'text-white/20'}`}>
                                             {i + 1}
@@ -509,6 +558,7 @@ const LeaderboardPage: React.FC = () => {
                                         <div className="text-xs text-white/60 truncate">{entry.game}</div>
                                         <div className="text-xs text-white/60 truncate">{entry.track}</div>
                                         <div className="text-xs text-white/60 truncate">{entry.car}</div>
+                                        <div className="text-xs text-white/40 truncate">{lapDate(entry)}</div>
                                         <div className="text-right font-mono font-bold text-[#2D9E49]">{entry.lapTime}</div>
                                         
                                         {isAdmin && (
@@ -729,5 +779,31 @@ const LeaderboardPage: React.FC = () => {
         </div>
     );
 };
+
+// ── Game names ─────────────────────────────────────────────────────────
+// Lap times are typed in by hand, so normalize common misspellings and hide
+// records whose game is not one we run (e.g. a driver's name typed into the game field).
+const KNOWN_GAMES = [
+    'Assetto Corsa', 'Assetto Corsa Competizione', 'Assetto Corsa Rally', 'Automobilista 2',
+    'BeamNG', 'F1 25', 'Grid Legends', 'Le Mans Ultimate',
+];
+const GAME_ALIASES: Record<string, string> = {
+    'asseto corsa': 'Assetto Corsa',
+    'assetto': 'Assetto Corsa',
+    'ac': 'Assetto Corsa',
+    'acc': 'Assetto Corsa Competizione',
+    'beamng.drive': 'BeamNG',
+    'f1': 'F1 25',
+    'grid': 'Grid Legends',
+    'lmu': 'Le Mans Ultimate',
+    'ams2': 'Automobilista 2',
+};
+function canonicalGame(raw: string | undefined): string | null {
+    const g = String(raw || '').trim().replace(/\s+/g, ' ');
+    if (!g) return null;
+    const exact = KNOWN_GAMES.find(k => k.toLowerCase() === g.toLowerCase());
+    if (exact) return exact;
+    return GAME_ALIASES[g.toLowerCase()] || null;
+}
 
 export default LeaderboardPage;

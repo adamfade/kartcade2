@@ -8,6 +8,7 @@ import { getMembershipById } from '../config/membership';
 import { getPaymentStatus, formatCurrency } from '../utils/paymentStatus';
 import { uploadProfilePhoto, deleteProfilePhoto, validatePhotoFile } from '../utils/profilePhoto';
 import CustomersTable from '../components/admin/CustomersTable';
+import { JuniorDriversPrompt, JuniorDriversCard } from '../components/JuniorDrivers';
 import { crmService, CustomerAnalytics } from '../services/crm';
 import { exportCustomersToCSV } from '../utils/csvExport';
 import { db } from '../config/firebase';
@@ -1124,6 +1125,7 @@ const DashboardPage: React.FC = () => {
             </div>
 
             <div className="container mx-auto px-4 md:px-6 lg:px-12 relative z-10">
+                <JuniorDriversPrompt />
                 {/* Status Messages */}
                 {successMessage && (
                     <div className="mb-6 p-4 bg-[#2D9E49]/10 border border-[#2D9E49]/30 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300">
@@ -2739,44 +2741,8 @@ const DashboardPage: React.FC = () => {
 
 
 
-                        {/* Junior Drivers Card */}
-                        {userProfile?.juniorDrivers && userProfile.juniorDrivers.length > 0 && (
-                            <div className="bg-[#141414] rounded-2xl p-6 border border-white/10">
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-12 h-12 bg-[#2D9E49]/20 rounded-lg flex items-center justify-center">
-                                            <User className="w-6 h-6 text-[#2D9E49]" />
-                                        </div>
-                                        <div>
-                                            <h2 className="font-display text-lg font-bold text-white uppercase">Junior Drivers</h2>
-                                            <p className="text-white/60 text-sm">Covered by your waiver</p>
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={() => setShowEditModal(true)}
-                                        className="text-[#2D9E49] hover:text-[#248a3f] transition-colors flex items-center gap-1 text-sm"
-                                    >
-                                        <Edit2 className="w-4 h-4" />
-                                        <span>Edit</span>
-                                    </button>
-                                </div>
-
-                                <div className="space-y-2">
-                                    {userProfile.juniorDrivers.map((junior, index) => (
-                                        <div key={index} className="flex items-center gap-2 p-3 bg-black/30 rounded-lg">
-                                            <div className="w-8 h-8 bg-[#2D9E49]/20 rounded-full flex items-center justify-center overflow-hidden">
-                                                {junior.photoURL ? (
-                                                    <img src={junior.photoURL} alt={junior.name} className="w-full h-full object-cover" />
-                                                ) : (
-                                                    <User className="w-4 h-4 text-[#2D9E49]" />
-                                                )}
-                                            </div>
-                                            <span className="text-white font-medium">{junior.name}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                        {/* Junior Drivers Card: always visible, with one-step add */}
+                        <JuniorDriversCard onEdit={() => setShowEditModal(true)} />
                     </div>
 
                     {/* Your Hosted Parties */}
