@@ -49,7 +49,7 @@ const routes = [
   {
     path: '/',
     title: 'Kartcade | Racing & Flight Simulator Lounge | West Linn, Oregon',
-    description: "Oregon's first racing and flight simulator lounge. ${TOTAL_SIMS} simulators, from kid-friendly karts to a full-motion rig. Walk in or book online in West Linn, near Lake Oswego and Portland.",
+    description: `Oregon's first racing and flight simulator lounge. ${TOTAL_SIMS} simulators, from kid-friendly karts to a full-motion rig. Walk in or book online in West Linn, near Lake Oswego and Portland.`,
     body: `<h1>Kartcade: Oregon's first racing and flight simulator lounge</h1>
 <p>Race head-to-head on ${TOTAL_SIMS} networked simulators, or fly anywhere in the world in Microsoft Flight Simulator. No experience needed. Ages ${ST.karts.minAge} and up.</p>
 <ul><li>Racing karts for kids and teens</li><li>Direct-drive full sim rigs</li><li>Full-motion simulator</li><li>Flight simulator with HOTAS controls</li></ul>
