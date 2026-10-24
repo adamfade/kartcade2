@@ -33,6 +33,8 @@ interface LapTime {
     submittedAt: Timestamp;
     competitionWins?: { daily: number; weekly: number; monthly: number; total: number };
     challengeId?: string | null;
+    source?: string;
+    updatedAt?: Timestamp;
 }
 
 interface Competition {
@@ -211,7 +213,8 @@ const LeaderboardPage: React.FC = () => {
             const activeComp = competitionFilter === 'daily' ? activeDaily : competitionFilter === 'weekly' ? activeWeekly : activeMonthly;
 
             // Use strict challenge filter ONLY for current period (offset 0) if a challenge exists
-            if (periodOffset === 0 && activeComp) {
+            // Rig laps (Lap Timer app) carry no challenge id; they count by date instead.
+            if (periodOffset === 0 && activeComp && t.source !== 'rig') {
                 if (t.challengeId !== activeComp.id) return false;
             } else {
                 // For historical periods or if no active challenge, use date range bounds
@@ -268,10 +271,30 @@ const LeaderboardPage: React.FC = () => {
     };
 
     // ── Default View Automation ───────────────────────────────────────────
+    // Open on today's best laps: the game and track driven most recently today, fastest first.
+    // No laps yet today: all-time view.
     useEffect(() => {
-        if (!loading && !filterGame && !filterTrack) {
+        if (loading || filterGame || filterTrack) return;
+        const bounds = getPeriodBounds('daily', 0)!;
+        const when = (t: LapTime) => {
+            const v: any = t.updatedAt || t.submittedAt;
+            if (!v) return null;
+            const d = v instanceof Timestamp ? v.toDate() : new Date(v);
+            return isNaN(d.getTime()) ? null : d;
+        };
+        const today = allTimes
+            .map(t => ({ t, d: when(t) }))
+            .filter(x => x.d && x.d >= bounds.start && x.d <= bounds.end)
+            .sort((a, b) => b.d!.getTime() - a.d!.getTime());
+        setSortKey('lapTimeMs');
+        setSortDir('asc');
+        setPeriodOffset(0);
+        if (today.length && today[0].t.game) {
+            setCompetitionFilter('daily');
+            setFilterGame(today[0].t.game);
+            if (today[0].t.track) setFilterTrack(today[0].t.track);
+        } else {
             setCompetitionFilter('all');
-            setPeriodOffset(0);
         }
     }, [loading]);
 
