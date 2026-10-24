@@ -37,6 +37,7 @@ interface UserProfile {
         name: string;
         photoURL?: string; // Junior driver photo URL
     }>;
+    juniorPromptDismissed?: boolean; // dashboard "Racing with kids?" prompt answered
     // Credits and Membership
     credits: UserCredits;
     bonusCredits: BonusCredits;
