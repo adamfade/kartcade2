@@ -77,7 +77,8 @@ export default async function handler(req: any, res: any) {
         await db.runTransaction(async (tx) => {
             const cur = await tx.get(ref);
             const prev = cur.exists ? (cur.data() as any) : null;
-            const best = prev && prev.lapTimeMs && prev.lapTimeMs <= lapTimeMs ? prev.lapTimeMs : lapTimeMs;
+            const improved = !(prev && prev.lapTimeMs && prev.lapTimeMs <= lapTimeMs);
+            const best = improved ? lapTimeMs : prev.lapTimeMs;
             tx.set(ref, {
                 source: 'rig',
                 rigId: clean(b.rigId, 20),
@@ -98,6 +99,7 @@ export default async function handler(req: any, res: any) {
                 status: 'approved',
                 final: !!b.final || !!prev?.final,
                 submittedAt: prev?.submittedAt || admin.firestore.FieldValue.serverTimestamp(),
+                bestAt: improved ? admin.firestore.FieldValue.serverTimestamp() : (prev?.bestAt || prev?.submittedAt || admin.firestore.FieldValue.serverTimestamp()),
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             }, { merge: true });
         });

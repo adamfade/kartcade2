@@ -35,6 +35,7 @@ interface LapTime {
     challengeId?: string | null;
     source?: string;
     updatedAt?: Timestamp;
+    bestAt?: Timestamp;
 }
 
 interface Competition {
@@ -82,6 +83,16 @@ const EquipmentIcon = ({ type, size = 14 }: { type: string; size?: number }) => 
     if (type === 'flight') return <Gauge {...props} />;
     return <Gauge {...props} />;
 };
+
+/** When the lap was set: the moment the best lap improved (rig laps), else when it was submitted. */
+function lapDate(t: { bestAt?: any; submittedAt?: any }): string {
+    const v = t.bestAt || t.submittedAt;
+    if (!v) return '';
+    const d = v instanceof Timestamp ? v.toDate() : typeof v?.toDate === 'function' ? v.toDate() : new Date(v);
+    if (isNaN(d.getTime())) return '';
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString('en-US', sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 function getPeriodBounds(type: CompetitionFilter, offset: number = 0): { start: Date; end: Date } | null {
     if (type === 'all') return null;
@@ -232,8 +243,19 @@ const LeaderboardPage: React.FC = () => {
         return true;
     });
 
+    // ── One row per driver per game / track / car: their fastest lap ──────
+    const driverKey = (t: LapTime) => t.userId ? `u:${t.userId}` : `n:${(t.driverName || '').trim().toLowerCase()}`;
+    const norm = (v: string | undefined) => (v || '').trim().toLowerCase();
+    const bestByDriver = new Map<string, LapTime>();
+    for (const t of filteredTimes) {
+        const k = [driverKey(t), t.game, norm(t.track), norm(t.car)].join('|');
+        const cur = bestByDriver.get(k);
+        if (!cur || t.lapTimeMs < cur.lapTimeMs) bestByDriver.set(k, t);
+    }
+    const bestTimes = [...bestByDriver.values()];
+
     // ── Sorting ───────────────────────────────────────────────────────────
-    const sorted = [...filteredTimes].sort((a, b) => {
+    const sorted = [...bestTimes].sort((a, b) => {
         const valA = a[sortKey];
         const valB = b[sortKey];
 
@@ -466,9 +488,9 @@ const LeaderboardPage: React.FC = () => {
             ) : (
                 <div className="rounded-2xl border border-white/10 overflow-hidden">
                     <div className="overflow-x-auto overflow-y-auto max-h-[60vh] custom-scrollbar">
-                        <div className={`min-w-[920px] ${isAdmin ? 'min-w-[960px]' : ''}`}>
+                        <div className={`min-w-[1010px] ${isAdmin ? 'min-w-[1050px]' : ''}`}>
                         {/* Table Header */}
-                        <div className={`sticky top-0 z-10 grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px]'} gap-3 px-5 py-3 bg-[#141414] border-b border-white/10 text-[10px] uppercase tracking-widest text-white/30`}>
+                        <div className={`sticky top-0 z-10 grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px]'} gap-3 px-5 py-3 bg-[#141414] border-b border-white/10 text-[10px] uppercase tracking-widest text-white/30`}>
                             <div className="text-center">#</div>
                             <button className="text-left hover:text-white/60 transition-colors" onClick={() => toggleSort('driverName')}>
                                 Driver <SortIcon k="driverName" />
@@ -481,6 +503,7 @@ const LeaderboardPage: React.FC = () => {
                             </button>
                             <div>Track</div>
                             <div>Car</div>
+                            <div>Date</div>
                             <button className="text-right hover:text-white/60 transition-colors" onClick={() => toggleSort('lapTimeMs')}>
                                 Lap Time <SortIcon k="lapTimeMs" />
                             </button>
@@ -498,7 +521,7 @@ const LeaderboardPage: React.FC = () => {
                                 return (
                                     <div
                                         key={entry.id}
-                                        className={`grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_100px]'} gap-3 px-5 py-4 items-center border-b border-white/5 transition-colors hover:bg-white/[0.02] ${isTop3 ? 'bg-white/[0.01]' : ''}`}
+                                        className={`grid ${isAdmin ? 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px_40px]' : 'grid-cols-[40px_minmax(220px,1fr)_150px_130px_120px_120px_80px_100px]'} gap-3 px-5 py-4 items-center border-b border-white/5 transition-colors hover:bg-white/[0.02] ${isTop3 ? 'bg-white/[0.01]' : ''}`}
                                     >
                                         <div className={`font-display font-bold text-center text-lg ${isTop3 ? rankColors[i] : 'text-white/20'}`}>
                                             {i + 1}
@@ -535,6 +558,7 @@ const LeaderboardPage: React.FC = () => {
                                         <div className="text-xs text-white/60 truncate">{entry.game}</div>
                                         <div className="text-xs text-white/60 truncate">{entry.track}</div>
                                         <div className="text-xs text-white/60 truncate">{entry.car}</div>
+                                        <div className="text-xs text-white/40 truncate">{lapDate(entry)}</div>
                                         <div className="text-right font-mono font-bold text-[#2D9E49]">{entry.lapTime}</div>
                                         
                                         {isAdmin && (
