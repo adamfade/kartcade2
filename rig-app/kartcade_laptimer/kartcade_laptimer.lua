@@ -1,4 +1,4 @@
--- Kartcade Lap Timer (CSP Lua app) v0.1
+-- Kartcade Lap Timer (CSP Lua app) v0.2
 -- Staff or driver types a name, presses Start, races, presses Stop.
 -- Every new best valid lap is sent to the Kartcade leaderboard; Stop sends the final result.
 
@@ -8,6 +8,22 @@ local API_URL   = cfg:get('KARTCADE', 'API_URL', 'https://www.kartcade.com/api/r
 local RIG_ID    = cfg:get('KARTCADE', 'RIG_ID', 'rig-01')
 local EQUIPMENT = cfg:get('KARTCADE', 'EQUIPMENT', 'rigs')
 local RIG_KEY   = cfg:get('KARTCADE', 'RIG_KEY', '')
+
+-- Fallback: read config.ini as plain text if the INI reader came back empty (path or format quirks).
+local function rawConfig(key)
+  for _, path in ipairs({ DIR .. '/config.ini', DIR .. '\\config.ini', 'apps/lua/kartcade_laptimer/config.ini' }) do
+    local ok, text = pcall(io.load, path)
+    if ok and type(text) == 'string' and #text > 0 then
+      local v = text:match('\n%s*' .. key .. '%s*=%s*([^\r\n;]+)') or text:match('^%s*' .. key .. '%s*=%s*([^\r\n;]+)')
+      if v then return (v:gsub('^%s+', ''):gsub('%s+$', ''):gsub('^"(.*)"$', '%1')) end
+    end
+  end
+  return nil
+end
+if type(RIG_KEY) ~= 'string' or RIG_KEY == '' or RIG_KEY == 'paste-rig-key-here' then RIG_KEY = rawConfig('RIG_KEY') or '' end
+if type(RIG_ID) ~= 'string' or RIG_ID == '' then RIG_ID = rawConfig('RIG_ID') or 'rig-01' end
+RIG_KEY = tostring(RIG_KEY):gsub('%s', '')
+local KEY_OK = #RIG_KEY >= 16 and RIG_KEY ~= 'paste-rig-key-here'
 
 local GREEN, RED, DIM = rgbm(0.18, 0.62, 0.29, 1), rgbm(0.83, 0.14, 0.16, 1), rgbm(1, 1, 1, 0.55)
 
@@ -47,11 +63,13 @@ local function send(final)
     driverName = session.name, email = session.email,
     car = safe(ac.getCarName, 0) or 'unknown', carId = safe(ac.getCarID, 0) or '',
     track = trackName(), trackId = safe(ac.getTrackID) or '',
-    lapTimeMs = session.best, laps = session.laps, final = final and true or false,
+    lapTimeMs = session.best, laps = session.laps, final = final and true or false, rigKey = RIG_KEY,
   })
   web.post(API_URL, { ['Content-Type'] = 'application/json', ['X-Rig-Key'] = RIG_KEY }, body, function(err, response)
     if err or not response or response.status ~= 200 then
-      setStatus('Upload failed, will retry on next lap')
+      local code = response and response.status or 0
+      setStatus(code == 401 and 'Upload refused: RIG_KEY does not match the website'
+        or ('Upload failed (' .. tostring(code ~= 0 and code or err) .. '), will retry on next lap'))
       session.pending = true
     else
       session.pending = false
@@ -103,7 +121,8 @@ end
 function script.windowMain(dt)
   ui.pushFont(ui.Font.Main)
   if state == 'idle' or state == 'saved' then
-    ui.textColored('KARTCADE LAP TIMER', RED)
+    ui.textColored('KARTCADE LAP TIMER  v0.2', RED)
+    if not KEY_OK then ui.textColored('RIG_KEY missing in config.ini: laps will not upload', RED) end
     if state == 'saved' and session then
       ui.text('Last: ' .. session.name .. '  ' .. fmt(session.best))
     end

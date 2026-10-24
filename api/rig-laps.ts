@@ -49,9 +49,11 @@ async function findUser(email: string) {
 export default async function handler(req: any, res: any) {
     res.setHeader('Cache-Control', 'no-store');
     if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
-    const given = String(req.headers['x-rig-key'] || '');
+    const b0 = typeof req.body === 'string' ? (() => { try { return JSON.parse(req.body || '{}'); } catch { return {}; } })() : req.body || {};
+    // The key comes as a header; the rig app also puts it in the body in case a client drops custom headers.
+    const given = String(req.headers['x-rig-key'] || b0.rigKey || '');
     if (!keyOk(given)) {
-        console.warn(JSON.stringify({ rigLaps: 'bad rig key', keySet: !!process.env.RIG_KEY, givenLen: given.length, expectedLen: (process.env.RIG_KEY || '').length }));
+        console.warn(JSON.stringify({ rigLaps: 'bad rig key', keySet: !!process.env.RIG_KEY, givenLen: given.length, header: !!req.headers['x-rig-key'], body: !!b0.rigKey, expectedLen: (process.env.RIG_KEY || '').length }));
         return res.status(401).json({ ok: false, error: 'bad rig key' });
     }
 
