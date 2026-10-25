@@ -9,6 +9,7 @@ import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import FloatingCallButton from './components/FloatingCallButton';
 import ProtectedRoute from './components/ProtectedRoute';
+import AdminRoute from './components/AdminRoute';
 // import Chatbot from './components/Chatbot'; // DISABLED - removed AI chatbot
 
 // Pages
@@ -41,6 +42,7 @@ import OnboardingPage from './pages/OnboardingPage';
 import BeatTheProPage from './pages/BeatTheProPage';
 import CampaignLandingPage from './pages/CampaignLandingPage';
 import NotFound from './pages/NotFound';
+const TrackBuilderPage = React.lazy(() => import('./pages/admin/TrackBuilderPage'));
 
 // Context
 import { AuthProvider } from './contexts/AuthContext';
@@ -109,6 +111,7 @@ const AppContent: React.FC = () => {
             <Route path="/email" element={<CampaignLandingPage />} />
 
             {/* Custom 404 handler instead of homepage redirect */}
+            <Route path="/admin/track-builder" element={<AdminRoute><React.Suspense fallback={<div className="min-h-screen bg-[#0A0A0A]" />}><TrackBuilderPage /></React.Suspense></AdminRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import PayPalCheckout from '../components/PayPalCheckout';
-import { User, CreditCard, Calendar, Clock, LogOut, ArrowRight, Zap, X, AlertCircle, Gauge, Monitor, Rocket, Edit2, Save, DollarSign, Camera, Trash2, Users, RefreshCw, Database, Download, CheckCircle, XCircle, ChevronDown, ChevronUp, Trophy, Medal, Award } from 'lucide-react';
+import { User, CreditCard, Calendar, Clock, LogOut, ArrowRight, Zap, X, AlertCircle, Gauge, Monitor, Rocket, Edit2, Save, DollarSign, Camera, Trash2, Users, RefreshCw, Database, Download, CheckCircle, XCircle, ChevronDown, ChevronUp, Trophy, Medal, Award, Map as MapIcon } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { bookingApi } from '../config/booking';
 import { getMembershipById } from '../config/membership';
@@ -1232,6 +1232,13 @@ const DashboardPage: React.FC = () => {
                             >
                                 <Trophy size={14} className="mr-2" /> Lap Times {adminLapTimes.filter(t => t.status === 'pending').length > 0 && `(${adminLapTimes.filter(t => t.status === 'pending').length} pending)`}
                             </button>
+                            <Link
+                                to="/admin/track-builder"
+                                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-white/5 text-white/50 hover:text-white hover:bg-white/10"
+                            >
+                                <MapIcon className="w-4 h-4" />
+                                Track builder
+                            </Link>
                         </div>
 
                         {/* Bookings View */}

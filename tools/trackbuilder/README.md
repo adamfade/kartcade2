@@ -1,0 +1,102 @@
+# Track builder
+
+Turns a stretch of real road into an Assetto Corsa point-to-point track. Pick a start and a finish (plus via
+pins), and it builds a drivable road on the real elevation profile, packed as a zip ready for
+`assettocorsa/content/tracks`.
+
+Two ways to run it, sharing the same library:
+
+- **Admin page:** `/admin/track-builder` on the Kartcade site (admins only; there's a "Track builder" button in the
+  dashboard's admin bar). Everything runs in the browser, and the zip downloads directly.
+- **CLI:** `npm run track -- ...`. See [CLI.md](CLI.md).
+
+## Data sources and licenses
+
+| What | Source | License / terms |
+|---|---|---|
+| Search | Nominatim (nominatim.openstreetmap.org) | OSM data, ODbL. Usage policy: max 1 request/second, no bulk geocoding. The page only searches when you press Search. |
+| Route along the road | OSRM demo server (router.project-osrm.org) | OSM data, ODbL. Demo server: light use only, no heavy or automated traffic. |
+| Road width and lanes (optional) | Overpass API (overpass-api.de) | OSM data, ODbL. If Overpass fails, the build falls back to 6.5 m. You can also type a width. |
+| Elevation | AWS Terrain Tiles, Terrarium encoding (s3.amazonaws.com/elevation-tiles-prod), zoom 14 | Open data. Attribution for the underlying sources (USGS 3DEP/NED in the US, and others) is listed at https://github.com/tilezen/joerd/blob/master/docs/attribution.md |
+| Map display | OpenStreetMap standard tiles | ODbL / OSM tile usage policy. Shown in the page only. |
+| Aerial view (off by default) | Esri World Imagery (server.arcgisonline.com) | Esri terms. **Map display only**: it is never baked into the track. |
+
+Every track's `ui_track.json` and `README.txt` carry the OSM attribution ("© OpenStreetMap contributors, ODbL").
+Textures are generated in code (asphalt with lines, grass, concrete), so the output contains no third-party
+imagery.
+
+No code was copied from other track generators.
+
+## What it outputs
+
+```
+<track_id>/
+  <track_id>.kn5        model: road, grass verges, walls (KN5 v5, ksPerPixel, textures embedded)
+  ai/fast_lane.ai       AI line along the centre (v7)
+  data/surfaces.ini     ROAD / GRASS / WALL
+  data/cameras.ini      3 replay cameras
+  data/map.ini, map.png minimap
+  ui/ui_track.json      name, length, width, "A to B" run, OSM attribution
+  ui/outline.png, ui/preview.png
+  README.txt
+```
+
+Model details:
+
+- **Physics meshes:** `1ROAD_n`, `1GRASS_L_n`, `1GRASS_R_n`, `1WALL_L`, `1WALL_R`, `1WALL_ENDA`, `1WALL_ENDB`.
+- **Spawns and gates:** `AC_START_0`, `AC_PIT_0`, `AC_HOTLAP_START_0`. Timing gates `AC_AB_START_L/R` and
+  `AC_AB_FINISH_L/R` sit 25 m from each end, with matching `AC_TIME_0/1_L/R` dummies.
+- **Road shape:** gentle crown, banking up to 4°, 1 m shoulders, 40 m of grass each side, and walls at the edge of
+  the grass.
+- **Elevation:** smoothed with a median filter, then a Gaussian (sigma 18 m), and grades are clamped at 22%. Real
+  DEM noise would otherwise make bumps.
+
+## Limits
+
+- **One road only.** No junctions, side roads, buildings, trees, barriers or signs; the land beyond the verge is
+  flat grass at road height.
+- **One AI line** down the centre, with speeds from curvature. No pit lane; one pit box at the start.
+- **Width:** single width for the whole track (OSM `width`, else `lanes` × 3.25 m, else 6.5 m). The live
+  Overpass call is optional and was blocked from the build sandbox, so it is untested against the live API.
+- **Elevation:** ~10 m DEM resolution at zoom 14. Cuttings and bridges come out as the ground under them.
+- **Route length:** the elevation fetch is capped at 64 tiles, roughly 15–20 km of road.
+- **Public services:** Nominatim and the OSRM demo are rate-limited community services. Fine for a few builds; not
+  for automation.
+- **Night lighting:** none. No CSP / Shaders Patch extension config.
+
+## Tests
+
+`npm run test:trackbuilder` runs the Node tests on a synthetic winding hill road: centreline, widths, PNG and
+Terrarium decode, grade clamp, full build with a KN5 read-back, required node names, AI file size, zip contents
+and ui_track.json.
+
+The Pete's Mountain Rd build (West Linn, 5.77 km, 252 m of climb) was also checked with a separate validator
+written independently from these formats. It passed with no failures or warnings, and the browser build matched
+the CLI build.
+
+## Test plan for Ad on a rig
+
+Nothing here has been loaded in Assetto Corsa yet. Allow about 20 minutes.
+
+1. **Install.** Build Pete's Mountain Rd on `/admin/track-builder` (the default pins) or use the zip you were sent.
+   Unzip so that `assettocorsa\content\tracks\petes_mountain_rd\petes_mountain_rd.kn5` exists.
+2. **It appears.** Open Content Manager → Drive → Tracks. "Pete's Mountain Rd" should be listed with its outline,
+   preview and 5.77 km length. *Screenshot the track card.*
+3. **It loads.** Start a Practice session with any road car (e.g. a Mazda MX-5). If it fails, copy the CM error and
+   the end of `Documents\Assetto Corsa\logs\log.txt`.
+4. **Spawn.** Check the car sits on the road at the start, facing downhill along the road (not into the grass).
+   - If it faces backwards, rebuild with **Flip start direction** ticked and report it.
+   - *Screenshot from the cockpit.*
+5. **Drive it.** Drive to the finish. Look for:
+   - the road surface feeling normal (not grass-slippery)
+   - grass feeling slippery
+   - walls stopping you
+   - no falling through the world
+   - no sudden steps in the road
+   Note anywhere it feels wrong (distance from start, or a screenshot).
+6. **Timing.** Confirm a time appears when you cross the finish. If not, note whether the timer started at all.
+7. **AI.** Start a Quick Race with 1–2 AI. Check they drive the road and don't stall or drive into the grass. A
+   wobbly AI is expected with a simple line; stopping or reversing is not.
+8. **Minimap.** Check the minimap shows the road shape and your car dot follows it (not mirrored).
+9. **Report.** Send what passed/failed with the screenshots. The likely fixes are small (start direction, map
+   orientation, AI layout), and a rebuild takes seconds.
