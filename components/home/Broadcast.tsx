@@ -5,6 +5,8 @@ import { Link } from 'react-router-dom';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import business, { station, stations, hoursByDay, weekRows, formatHour, minPrice, fullAddress } from '../../config/business';
+import { useCompetitions, useEntries } from '../competitions/data';
+import { comboLabel, phaseOf, LiveCompetition } from '../../config/competitions';
 import './broadcast.css';
 
 const P = business.party;
@@ -76,14 +78,38 @@ function useStatusNow() {
     return { day, today, status, open, next };
 }
 
+// When a competition is live, the home board shows it instead of all-time laps.
+const LiveCompBoard: React.FC<{ comp: LiveCompetition }> = ({ comp }) => {
+    const entries = useEntries(comp.id, 5);
+    return (
+        <div className="board" aria-label={`${comp.name} live results`}>
+            <div className="head"><span><b>{comp.name}</b> {comboLabel(comp)}</span><span className="mono" style={{ color: 'var(--green-hi)' }}>Live</span></div>
+            <table>
+                <tbody>
+                    {entries === null && <tr><td className="pos">…</td><td className="who">Loading times</td><td className="t">--:--.---</td></tr>}
+                    {entries?.map((e, i) => (
+                        <tr key={e.id}><td className="pos">{i + 1}</td><td className="who">{e.driverName}</td><td className="t">{e.lapTime}</td></tr>
+                    ))}
+                    {entries && entries.length < 5 && (
+                        <tr className="you"><td className="pos">{entries.length + 1}</td><td className="who">You, next visit</td><td className="t">--:--.---</td></tr>
+                    )}
+                </tbody>
+            </table>
+            <div className="foot">Laps on the rigs post here automatically. <Link to={`/competitions/${comp.id}`} style={{ color: '#fff' }}>Full results</Link></div>
+        </div>
+    );
+};
+
 const Broadcast: React.FC = () => {
     const laps = useTopLaps(5);
+    const comps = useCompetitions(false);
+    const liveComp = comps?.find((c) => phaseOf(c) === 'live');
     const now = useStatusNow();
     const totalSims = stations.reduce((n, s) => n + s.units, 0);
     const mapSrc = `https://www.google.com/maps?q=${encodeURIComponent(fullAddress)}&output=embed`;
 
     const tickerItems = [
-        <><b className="r">Hot Lap Challenge</b> Live leaderboard at kartcade.com/leaderboard</>,
+        <><b className="r">Competitions</b> Live lap times at kartcade.com/competitions</>,
         <>Gift cards: any amount, sent by email</>,
         <>Private parties from <b>${P.basePrice}</b> for the whole space, up to {P.maxGuests} guests</>,
         <>{totalSims} simulators, your whole group races at once</>,
@@ -126,10 +152,10 @@ const Broadcast: React.FC = () => {
                         <p>Set a lap on a rig and it goes on the Kartcade leaderboard. Come back, find the tenths, and take the top spot from whoever holds it.</p>
                         <div className="ctas">
                             <Link className="btn btn-red" to="/book">Book a rig and set a time</Link>
-                            <Link className="btn btn-ghost" to="/leaderboard">See the leaderboard</Link>
+                            <Link className="btn btn-ghost" to={liveComp ? '/competitions' : '/leaderboard'}>{liveComp ? 'See the competition' : 'See the leaderboard'}</Link>
                         </div>
                     </div>
-                    <div className="board" aria-label="Fastest laps">
+                    {liveComp ? <LiveCompBoard comp={liveComp} /> : <div className="board" aria-label="Fastest laps">
                         <div className="head"><span><b>Fastest laps</b></span><span className="mono">Leaderboard</span></div>
                         <table>
                             <tbody>
@@ -147,7 +173,7 @@ const Broadcast: React.FC = () => {
                             </tbody>
                         </table>
                         <div className="foot">Approved times from the rigs. Full board, filters and past winners on the leaderboard page.</div>
-                    </div>
+                    </div>}
                 </div>
             </section>
 

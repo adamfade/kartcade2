@@ -95,6 +95,12 @@ const routes = [
     body: `<h1>Lap time leaderboard</h1><p>The fastest drivers at Kartcade. Every session can post a time.</p>`,
   },
   {
+    path: '/competitions',
+    title: 'Competitions | Live Sim Racing Lap Times | Kartcade',
+    description: 'Live sim racing competitions at Kartcade in West Linn. One track, a set window: every lap on the rigs posts to the live board automatically. Past results in the archive.',
+    body: `<h1>Competitions</h1><p>One track, a set window and a live board. Drive the competition track on a Kartcade rig and every lap posts automatically. Fastest lap when the window closes wins. Past competitions and their final results are in the archive.</p>`,
+  },
+  {
     path: '/faq',
     title: 'FAQ | Ages, Walk-ins, What to Wear | Kartcade Racing Simulators',
     description: 'Answers about age requirements, walk-ins, what to wear, group pricing and parties at Kartcade racing and flight simulator lounge in West Linn.',

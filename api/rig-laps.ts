@@ -46,6 +46,26 @@ async function findUser(email: string) {
     return { uid: doc.id, ...(doc.data() as any) };
 }
 
+// Live competitions this lap counts toward: open right now, same track (and layout/car when set).
+async function matchingCompetitions(lap: { trackId: string; track: string; carId: string; equipment: string }) {
+    if (!lap.trackId) return [];
+    const now = admin.firestore.Timestamp.now();
+    const snap = await db.collection('live_competitions').where('endAt', '>=', now).get();
+    return snap.docs.filter((d) => {
+        const c = d.data() as any;
+        if (!c.startAt || c.startAt.toMillis() > now.toMillis()) return false;
+        if (c.game && c.game !== 'Assetto Corsa') return false;
+        if (c.trackId !== lap.trackId) return false;
+        if (c.trackName && c.trackName !== lap.track) return false;
+        if (c.carId && c.carId !== lap.carId) return false;
+        if (c.equipment && c.equipment !== lap.equipment) return false;
+        return true;
+    }).map((d) => ({ id: d.id, startMs: (d.data() as any).startAt.toMillis() as number }));
+}
+
+const driverKey = (uid: string, name: string) =>
+    uid ? `u_${uid}` : `n_${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'driver'}`;
+
 export default async function handler(req: any, res: any) {
     res.setHeader('Cache-Control', 'no-store');
     if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
@@ -73,9 +93,17 @@ export default async function handler(req: any, res: any) {
         const email = clean(b.email, 120).toLowerCase();
         const user = await findUser(email);
         const ref = db.collection('lap_times').doc(`rig_${sessionId}`);
+        const lapTrack = { trackId: clean(b.trackId), track: clean(b.track), carId: clean(b.carId), equipment };
+        let comps: { id: string; startMs: number }[] = [];
+        try { comps = await matchingCompetitions(lapTrack); }
+        catch (err: any) { console.error('rig-laps competitions lookup failed:', err?.message); }
+        const name = user?.name || driverName;
+        const compIds = comps.map((c) => c.id);
+        const entryRefs = compIds.map((id) => db.collection('live_competitions').doc(id).collection('entries').doc(driverKey(user?.uid || '', name)));
 
         await db.runTransaction(async (tx) => {
             const cur = await tx.get(ref);
+            const entries = await Promise.all(entryRefs.map((r) => tx.get(r)));
             const prev = cur.exists ? (cur.data() as any) : null;
             const improved = !(prev && prev.lapTimeMs && prev.lapTimeMs <= lapTimeMs);
             const best = improved ? lapTimeMs : prev.lapTimeMs;
@@ -102,9 +130,30 @@ export default async function handler(req: any, res: any) {
                 bestAt: improved ? admin.firestore.FieldValue.serverTimestamp() : (prev?.bestAt || prev?.submittedAt || admin.firestore.FieldValue.serverTimestamp()),
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             }, { merge: true });
+
+            // Post to each open competition when this beats the driver's entry there.
+            entries.forEach((e, i) => {
+                const prevMs = e.exists ? (e.data() as any).lapTimeMs : 0;
+                if (prevMs && prevMs <= lapTimeMs) return;
+                // A session best set before the competition opened doesn't count.
+                const bestAtMs = prev?.bestAt?.toMillis?.() || 0;
+                if (!improved && bestAtMs && bestAtMs < comps[i].startMs) return;
+                tx.set(entryRefs[i], {
+                    driverName: name,
+                    userId: user?.uid || '',
+                    photoURL: user?.photoURL || '',
+                    lapTimeMs,
+                    lapTime: formatLap(lapTimeMs),
+                    car: clean(b.car),
+                    rigId: clean(b.rigId, 20),
+                    sessionId,
+                    at: admin.firestore.FieldValue.serverTimestamp(),
+                });
+            });
+            if (compIds.length) tx.set(ref, { competitionIds: admin.firestore.FieldValue.arrayUnion(...compIds) }, { merge: true });
         });
 
-        console.log(JSON.stringify({ rigLaps: 'saved', doc: ref.id, linked: !!user }));
+        console.log(JSON.stringify({ rigLaps: 'saved', doc: ref.id, linked: !!user, competitions: compIds.length }));
         return res.status(200).json({ ok: true, linked: !!user });
     } catch (err: any) {
         console.error('rig-laps failed:', err?.message);

@@ -36,6 +36,11 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://www.kartcade.com/competitions</loc>
+    <lastmod>2026-10-25</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://www.kartcade.com/faq</loc>
     <lastmod>2026-10-13</lastmod>
     <priority>0.7</priority>

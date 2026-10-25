@@ -35,6 +35,7 @@ import DashboardPage from './pages/DashboardPage';
 import DriverProfilePage from './pages/DriverProfilePage';
 import CheckoutPage from './pages/CheckoutPage';
 import LeaderboardPage from './pages/LeaderboardPage';
+import { CompetitionsPage, CompetitionDetailPage } from './pages/CompetitionsPage';
 import CheckoutSuccessPage from './pages/CheckoutSuccessPage';
 import CheckoutCancelPage from './pages/CheckoutCancelPage';
 import OnboardingPage from './pages/OnboardingPage';
@@ -96,6 +97,8 @@ const AppContent: React.FC = () => {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/driver-profile" element={<DriverProfilePage />} />
             <Route path="/leaderboard" element={<LeaderboardPage />} />
+            <Route path="/competitions" element={<CompetitionsPage />} />
+            <Route path="/competitions/:id" element={<CompetitionDetailPage />} />
             <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
