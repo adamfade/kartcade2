@@ -8,6 +8,8 @@ import { buildGeometry } from './mesh.ts';
 import type { TrackGeometry } from './mesh.ts';
 import { trackMaterials, writeKn5 } from './kn5.ts';
 import { writeFastLane } from './aiLine.ts';
+
+export const INCLUDE_AI = false;
 import { asphaltTexture, concreteTexture, grassTexture } from './textures.ts';
 import { drawPolyline, encodePNG, makeImage } from './png.ts';
 import type { LatLon } from './geo.ts';
@@ -141,7 +143,8 @@ export function buildTrack(input: BuildInput): BuildResult {
     const enc = new TextEncoder();
     const files: Record<string, Uint8Array> = {
         [`${id}/${id}.kn5`]: kn5,
-        [`${id}/ai/fast_lane.ai`]: ai,
+        // AI spline left out until its format is confirmed against a file recorded in game (v7 crashed AC on load).
+        ...(INCLUDE_AI ? { [`${id}/ai/fast_lane.ai`]: ai } : {}),
         [`${id}/data/surfaces.ini`]: enc.encode(surfacesIni()),
         [`${id}/data/cameras.ini`]: enc.encode(cameras),
         [`${id}/data/map.ini`]: enc.encode(mapIni),

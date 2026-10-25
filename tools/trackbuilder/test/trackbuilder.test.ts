@@ -74,9 +74,10 @@ test('full build: KN5 round-trips, meshes are valid, AI and zip are complete', (
     });
     for (const want of ['1ROAD_0', '1GRASS_L_0', '1GRASS_R_0', '1WALL_L', 'AC_START_0', 'AC_PIT_0', 'AC_HOTLAP_START_0', 'AC_TIME_0_L', 'AC_TIME_0_R', 'AC_TIME_1_L', 'AC_TIME_1_R', 'AC_AB_START_L', 'AC_AB_START_R', 'AC_AB_FINISH_L', 'AC_AB_FINISH_R']) assert.ok(names.includes(want), `missing ${want}`);
     const n = res.centerline.points.length;
-    assert.equal(res.files['test_hill_rd/ai/fast_lane.ai'].length, 16 + n * 20 + 4 + n * 72);
+    assert.equal(res.files['test_hill_rd/ai/fast_lane.ai'], undefined); // AI spline off until verified in game
+    void n;
     const unz = unzipSync(res.zip);
-    for (const f of ['kn5', 'ai/fast_lane.ai', 'data/surfaces.ini', 'data/cameras.ini', 'data/map.ini', 'map.png', 'ui/ui_track.json', 'ui/outline.png', 'ui/preview.png'])
+    for (const f of ['kn5', 'data/surfaces.ini', 'data/cameras.ini', 'data/map.ini', 'map.png', 'ui/ui_track.json', 'ui/outline.png', 'ui/preview.png'])
         assert.ok(unz[f === 'kn5' ? 'test_hill_rd/test_hill_rd.kn5' : `test_hill_rd/${f}`], `zip missing ${f}`);
     const ui = JSON.parse(new TextDecoder().decode(unz['test_hill_rd/ui/ui_track.json']));
     assert.equal(ui.run, 'A to B');
