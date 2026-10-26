@@ -846,8 +846,14 @@ const DashboardPage: React.FC = () => {
     };
 
     // Format date for display
+    // Booking dates come as "YYYY-MM-DD" or a full timestamp; read both as a local calendar day
+    const bookingDay = (dateStr: string) => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+        return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(dateStr);
+    };
+
     const formatDate = (dateStr: string) => {
-        const date = new Date(dateStr);
+        const date = bookingDay(dateStr);
         return date.toLocaleDateString('en-US', {
             weekday: 'short',
             month: 'short',
@@ -3007,10 +3013,10 @@ const DashboardPage: React.FC = () => {
                                                 {/* Date/Time */}
                                                 <div className="text-center min-w-[60px]">
                                                     <div className="text-2xl font-bold text-white">
-                                                        {new Date(booking.date).getUTCDate()}
+                                                        {bookingDay(booking.date).getDate()}
                                                     </div>
                                                     <div className="text-xs text-white/60 uppercase">
-                                                        {new Date(booking.date).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}
+                                                        {bookingDay(booking.date).toLocaleDateString('en-US', { month: 'short' })}
                                                     </div>
                                                 </div>
 
@@ -3098,10 +3104,10 @@ const DashboardPage: React.FC = () => {
                                                     {/* Date/Time */}
                                                     <div className="text-center min-w-[60px]">
                                                         <div className="text-xl font-bold text-white">
-                                                            {new Date(booking.date).getUTCDate()}
+                                                            {bookingDay(booking.date).getDate()}
                                                         </div>
                                                         <div className="text-xs text-white/60 uppercase">
-                                                            {new Date(booking.date).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}
+                                                            {bookingDay(booking.date).toLocaleDateString('en-US', { month: 'short' })}
                                                         </div>
                                                     </div>
 
