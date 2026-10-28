@@ -6,7 +6,7 @@ import { bboxOf, haversine } from './geo.ts';
 import type { LatLon } from './geo.ts';
 import { terrariumSampler, terrariumUrl, tilesForBBox } from './elevation.ts';
 import type { TilePixels } from './elevation.ts';
-import { dominantWidth } from './route.ts';
+import { dominantWidth, roadWidthFromTags } from './route.ts';
 import { buildTrack } from './pack.ts';
 import type { BuildResult } from './pack.ts';
 
@@ -89,6 +89,7 @@ export interface BuildFromPinsInput {
     flipStart?: boolean;
     city?: string;
     useOverpass?: boolean;
+    includeAi?: boolean;
 }
 
 export async function buildFromPins(net: NetOptions, decode: DecodeTile, input: BuildFromPinsInput): Promise<BuildResult & { routeDistanceM: number; widthSource: string }> {
@@ -112,6 +113,59 @@ export async function buildFromPins(net: NetOptions, decode: DecodeTile, input: 
     }
     log(`Road width ${width.toFixed(1)} m (${widthSource})`);
     const sampler = await elevationSampler(net, r.line, decode);
-    const result = buildTrack({ name: input.name, polyline: r.line, heightSampler: sampler, width, walls: input.walls, flipStart: input.flipStart, city: input.city, log });
+    const result = buildTrack({ name: input.name, polyline: r.line, heightSampler: sampler, width, walls: input.walls, flipStart: input.flipStart, city: input.city, includeAi: input.includeAi, log });
     return { ...result, routeDistanceM: r.distanceM, widthSource };
+}
+
+export interface Raceway { id: number; name: string; closed: boolean; lengthM: number; width: number | null; line: LatLon[] }
+
+/**
+ * OpenStreetMap raceways (highway=raceway) near a point, for circuit mode. Karting and race circuits are
+ * usually mapped as one closed way along the racing line. Overpass; optional (the user can load a trace
+ * file instead). Note: Overpass is blocked from the build sandbox, so this is untested against the live API.
+ */
+export async function racewaysNear(net: NetOptions, p: LatLon, radiusM = 600): Promise<Raceway[]> {
+    const q = `[out:json][timeout:20];way(around:${Math.round(radiusM)},${p.lat.toFixed(6)},${p.lon.toFixed(6)})[highway=raceway];out tags geom;`;
+    const res = await net.fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...(net.headers ?? {}) },
+        body: `data=${encodeURIComponent(q)}`,
+    });
+    if (!res.ok) throw new Error(`Overpass answered ${res.status}`);
+    const j = await res.json();
+    return (j.elements ?? []).filter((e: { geometry?: LatLon[] }) => (e.geometry?.length ?? 0) >= 2).map((e: { id: number; tags?: Record<string, string>; geometry: LatLon[] }) => {
+        const g = e.geometry.map((q) => ({ lat: q.lat, lon: q.lon }));
+        let lengthM = 0;
+        for (let i = 1; i < g.length; i++) lengthM += haversine(g[i - 1], g[i]);
+        const closed = g.length > 3 && haversine(g[0], g[g.length - 1]) < 2;
+        const tags = e.tags ?? {};
+        const w = tags.width ? roadWidthFromTags({ width: tags.width }, NaN) : NaN;
+        return { id: e.id, name: tags.name ?? `Raceway ${e.id}`, closed, lengthM, width: Number.isFinite(w) ? w : null, line: g };
+    }).sort((a: Raceway, b: Raceway) => Number(b.closed) - Number(a.closed) || b.lengthM - a.lengthM);
+}
+
+export interface BuildFromTraceInput {
+    name: string;
+    /** The traced centreline. For a circuit, a loop; its first point is the start/finish line. */
+    line: LatLon[];
+    circuit?: boolean;
+    reverse?: boolean;
+    width: number;
+    gridSlots?: number;
+    walls?: boolean;
+    flipStart?: boolean;
+    city?: string;
+    includeAi?: boolean;
+}
+
+/** Build from a traced line (no routing): circuits, or a road OSRM won't follow. */
+export async function buildFromTrace(net: NetOptions, decode: DecodeTile, input: BuildFromTraceInput): Promise<BuildResult> {
+    const log = net.log ?? (() => {});
+    if (input.line.length < (input.circuit ? 3 : 2)) throw new Error(input.circuit ? 'A circuit needs at least three points' : 'Need at least two points');
+    log(`Trace: ${input.line.length} points${input.circuit ? ', closed loop' : ''}; width ${input.width.toFixed(1)} m`);
+    const sampler = await elevationSampler(net, input.line, decode);
+    return buildTrack({
+        name: input.name, polyline: input.line, heightSampler: sampler, width: input.width, walls: input.walls,
+        flipStart: input.flipStart, circuit: input.circuit, reverse: input.reverse, gridSlots: input.gridSlots, city: input.city, includeAi: input.includeAi, log,
+    });
 }

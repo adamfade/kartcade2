@@ -69,35 +69,48 @@ function median(a: number[]) { const s = a.slice().sort((x, y) => x - y); return
  * Heights along the centerline. Raw DEM samples are noisy (trees, bridges, 10 m cells), so:
  * median filter -> Gaussian -> grade clamp. sigmaM is the Gaussian radius in metres.
  */
-export function roadProfile(points: LatLon[], s: number[], sampler: HeightSampler, opts: { sigmaM?: number; maxGrade?: number } = {}): Profile {
+export function roadProfile(points: LatLon[], s: number[], sampler: HeightSampler, opts: { sigmaM?: number; maxGrade?: number; closed?: boolean; loopLength?: number } = {}): Profile {
     const n = points.length;
+    const closed = !!opts.closed;
     const raw = points.map((p) => sampler(p));
     // Fill unknowns from the nearest known sample.
     let last: number | null = raw.find((v) => v != null) ?? 0;
     const filled = raw.map((v) => { if (v != null) last = v; return last as number; });
-    const step = n > 1 ? s[n - 1] / (n - 1) : 2;
+    const step = n > 1 ? (closed && opts.loopLength ? opts.loopLength / n : s[n - 1] / (n - 1)) : 2;
+    // Index into the profile: wraps around a circuit, clamps at the ends of a road.
+    const at = (i: number) => (closed ? ((i % n) + n) % n : Math.min(n - 1, Math.max(0, i)));
     const mWin = Math.max(1, Math.round(6 / step));
-    const med = filled.map((_, i) => median(filled.slice(Math.max(0, i - mWin), Math.min(n, i + mWin + 1))));
+    const med = filled.map((_, i) => {
+        const win: number[] = [];
+        for (let k = -mWin; k <= mWin; k++) { const j = i + k; if (closed || (j >= 0 && j < n)) win.push(filled[at(j)]); }
+        return median(win);
+    });
     const sig = Math.max(0.5, (opts.sigmaM ?? 18) / step);
-    const r = Math.ceil(sig * 3);
-    let h = med.map((_, i) => {
+    const r = closed ? Math.min(Math.ceil(sig * 3), Math.floor((n - 1) / 2)) : Math.ceil(sig * 3);
+    const h = med.map((_, i) => {
         let a = 0, w = 0;
         for (let k = -r; k <= r; k++) {
-            const j = Math.min(n - 1, Math.max(0, i + k));
             const ww = Math.exp(-(k * k) / (2 * sig * sig));
-            a += med[j] * ww; w += ww;
+            a += med[at(i + k)] * ww; w += ww;
         }
         return a / w;
     });
-    // Clamp grade so a bad DEM cell can't make a wall.
+    // Clamp grade so a bad DEM cell can't make a wall. On a circuit the passes run round the loop twice
+    // so the step across the start/finish line is clamped too.
     const g = opts.maxGrade ?? 0.22;
+    const gap = (i: number, j: number) => (closed ? (j === 0 && i === n - 1 ? (opts.loopLength ?? s[n - 1] + step) - s[n - 1] : Math.abs(s[j] - s[i])) : Math.abs(s[j] - s[i]));
+    const reps = closed ? 2 : 1;
     for (let pass = 0; pass < 3; pass++) {
-        for (let i = 1; i < n; i++) { const d = (s[i] - s[i - 1]) * g; h[i] = Math.min(h[i - 1] + d, Math.max(h[i - 1] - d, h[i])); }
-        for (let i = n - 2; i >= 0; i--) { const d = (s[i + 1] - s[i]) * g; h[i] = Math.min(h[i + 1] + d, Math.max(h[i + 1] - d, h[i])); }
+        for (let rep = 0; rep < reps; rep++) for (let i = 1; i < n + (closed ? 1 : 0); i++) {
+            const a = at(i - 1), b = at(i); const d = gap(a, b) * g; h[b] = Math.min(h[a] + d, Math.max(h[a] - d, h[b]));
+        }
+        for (let rep = 0; rep < reps; rep++) for (let i = n - 2 + (closed ? 1 : 0); i >= 0; i--) {
+            const a = at(i), b = at(i + 1); const d = gap(a, b) * g; h[a] = Math.min(h[b] + d, Math.max(h[b] - d, h[a]));
+        }
     }
     let climb = 0, descent = 0, maxGrade = 0;
-    for (let i = 1; i < n; i++) { const d = h[i] - h[i - 1]; if (d > 0) climb += d; else descent -= d; }
+    for (let i = 1; i < n + (closed ? 1 : 0); i++) { const d = h[at(i)] - h[i - 1]; if (d > 0) climb += d; else descent -= d; }
     const win = Math.max(1, Math.round(20 / step));
-    for (let i = win; i < n; i++) maxGrade = Math.max(maxGrade, Math.abs(h[i] - h[i - win]) / (s[i] - s[i - win] || 1));
+    for (let i = win; i < n + (closed ? win : 0); i++) maxGrade = Math.max(maxGrade, Math.abs(h[at(i)] - h[i - win]) / ((closed ? win * step : s[i] - s[i - win]) || 1));
     return { heights: h, climb, descent, maxGrade, min: Math.min(...h), max: Math.max(...h) };
 }

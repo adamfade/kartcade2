@@ -7,3 +7,4 @@ export * from './aiLine.ts';
 export * from './pack.ts';
 export * from './png.ts';
 export * from './fetchers.ts';
+export * from './trace.ts';

@@ -1,7 +1,7 @@
 // Turns a road (polyline + heights) into a ready-to-install Assetto Corsa track folder and zip.
 
 import { zipSync } from 'fflate';
-import { buildCenterline } from './route.ts';
+import { buildCenterline, signedArea } from './route.ts';
 import { roadProfile } from './elevation.ts';
 import type { HeightSampler, Profile } from './elevation.ts';
 import { buildGeometry } from './mesh.ts';
@@ -26,6 +26,14 @@ export interface BuildInput {
     country?: string;
     walls?: boolean;
     flipStart?: boolean;
+    /** Circuit: treat the polyline as a closed loop. The first point is the start/finish line. */
+    circuit?: boolean;
+    /** Drive the route the other way round (start becomes finish; a circuit runs the opposite direction). */
+    reverse?: boolean;
+    /** Circuit: grid slots and pit boxes (default 12). */
+    gridSlots?: number;
+    /** Include ai/fast_lane.ai. Defaults to INCLUDE_AI; set true to build a test copy with the AI line. */
+    includeAi?: boolean;
     log?: (msg: string) => void;
 }
 
@@ -59,14 +67,23 @@ function surfacesIni() {
 export function buildTrack(input: BuildInput): BuildResult {
     const log = input.log ?? (() => {});
     const id = input.id ?? trackId(input.name);
-    log('Smoothing the centerline');
-    const cl = buildCenterline(input.polyline, { spacing: 2 });
+    const circuit = !!input.circuit;
+    let polyline = input.reverse ? input.polyline.slice().reverse() : input.polyline;
+    // Reversing a loop keeps the same start/finish point.
+    if (circuit && input.reverse) polyline = [polyline[polyline.length - 1], ...polyline.slice(0, -1)];
+    log(circuit ? 'Smoothing the circuit loop' : 'Smoothing the centerline');
+    const cl = buildCenterline(polyline, { spacing: circuit ? 1 : 2, closed: circuit });
     const ll = cl.points.map((p) => cl.projection.toLatLon(p));
     log(`Sampling elevation along ${(cl.length / 1000).toFixed(2)} km`);
-    const profile = roadProfile(ll, cl.s, input.heightSampler);
+    const profile = roadProfile(ll, cl.s, input.heightSampler, circuit ? { closed: true, loopLength: cl.length, sigmaM: 12 } : {});
     const ground = (x: number, y: number) => input.heightSampler(cl.projection.toLatLon({ x, y }));
     log('Building road, verges and walls');
-    const geometry = buildGeometry(cl, profile.heights, { width: input.width, walls: input.walls ?? true, ground, flipStart: input.flipStart });
+    const geometry = buildGeometry(cl, profile.heights, {
+        width: input.width, walls: input.walls ?? true, ground, flipStart: circuit ? false : input.flipStart,
+        gridSlots: input.gridSlots, ...(circuit ? { verge: 25, maxBankDeg: 2 } : {}),
+    });
+    const pitboxes = geometry.dummies.filter((d) => d.name.startsWith('AC_PIT_')).length;
+    const clockwise = circuit && signedArea(cl.points) < 0;
     const triangles = geometry.parts.reduce((a, p) => a + p.indices.length / 3, 0);
 
     log('Writing the KN5 model');
@@ -84,8 +101,11 @@ export function buildTrack(input: BuildInput): BuildResult {
     log('Writing the AI line');
     const half = input.width / 2;
     const aiPts = cl.points.map((p, i) => ({ x: p.x, y: geometry.roadHeightAt(i, 0), z: p.y }));
-    const grade = profile.heights.map((h, i) => (i > 0 ? (h - profile.heights[i - 1]) / (cl.s[i] - cl.s[i - 1] || 1) : 0));
-    const ai = writeFastLane(aiPts, { halfWidth: half, curvature: cl.curvature, grade });
+    const grade = profile.heights.map((h, i) => {
+        if (i > 0) return (h - profile.heights[i - 1]) / (cl.s[i] - cl.s[i - 1] || 1);
+        return circuit ? (h - profile.heights[profile.heights.length - 1]) / (cl.length - cl.s[cl.s.length - 1] || 1) : 0;
+    });
+    const ai = writeFastLane(aiPts, { halfWidth: half, curvature: cl.curvature, grade, closed: circuit });
 
     log('Drawing the map and previews');
     const xs = cl.points.map((p) => p.x), zs = cl.points.map((p) => p.y);
@@ -98,29 +118,30 @@ export function buildTrack(input: BuildInput): BuildResult {
     // so the car marker lines up with the drawn road.
     const map = makeImage(mw, mh);
     const toMap = (x: number, z: number) => ({ x: (x - minX) / scale + margin, y: (z - minZ) / scale + margin });
-    drawPolyline(map, cl.points.map((p) => toMap(p.x, p.y)), 3, [255, 255, 255, 255]);
+    const loopPts = circuit ? [...cl.points, cl.points[0]] : cl.points;
+    drawPolyline(map, loopPts.map((p) => toMap(p.x, p.y)), 3, [255, 255, 255, 255]);
     const mapIni = ini({ PARAMETERS: { WIDTH: mw, HEIGHT: mh, MARGIN: margin, SCALE_FACTOR: scale.toFixed(6), X_OFFSET: (-minX + margin * scale).toFixed(3), Z_OFFSET: (-minZ + margin * scale).toFixed(3), DRAWING_SIZE: 10, MAX_SIZE: Math.max(mw, mh) } });
 
     const thumb = (w: number, h: number, bg: [number, number, number, number], fg: [number, number, number, number], r: number) => {
         const img = makeImage(w, h, bg);
         const pad = 20, s = Math.max((maxX - minX) / (w - 2 * pad), (maxZ - minZ) / (h - 2 * pad), 1e-6);
         const ox = (w - (maxX - minX) / s) / 2, oy = (h - (maxZ - minZ) / s) / 2;
-        drawPolyline(img, cl.points.map((p) => ({ x: ox + (p.x - minX) / s, y: h - (oy + (p.y - minZ) / s) })), r, fg);
+        drawPolyline(img, loopPts.map((p) => ({ x: ox + (p.x - minX) / s, y: h - (oy + (p.y - minZ) / s) })), r, fg);
         return encodePNG(img);
     };
 
     const lengthM = Math.round(cl.length);
     const uiTrack = {
         name: input.name,
-        description: `${input.name}, built from the real road. Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb. Road data © OpenStreetMap contributors (ODbL); elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM). Made for Kartcade.`,
-        tags: ['point to point', 'real road', 'Oregon', 'Kartcade'],
+        description: `${input.name}, built from the real ${circuit ? 'circuit' : 'road'}. ${circuit ? `Circuit, ${(cl.length / 1000).toFixed(2)} km lap, ${pitboxes} pit boxes` : `Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb`}. Road data © OpenStreetMap contributors (ODbL); elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM). Made for Kartcade.`,
+        tags: circuit ? ['circuit', 'real track', 'Oregon', 'Kartcade'] : ['point to point', 'real road', 'Oregon', 'Kartcade'],
         geotags: [input.polyline[0].lat.toFixed(5), input.polyline[0].lon.toFixed(5)],
         country: input.country ?? 'USA',
         city: input.city ?? 'West Linn',
         length: String(lengthM),
         width: String(Math.round(input.width * 10) / 10),
-        pitboxes: '1',
-        run: 'A to B',
+        pitboxes: String(pitboxes),
+        run: circuit ? (clockwise ? 'clockwise' : 'counter-clockwise') : 'A to B',
         author: 'Kartcade',
         version: '0.1',
         url: 'https://www.kartcade.com',
@@ -144,7 +165,7 @@ export function buildTrack(input: BuildInput): BuildResult {
     const files: Record<string, Uint8Array> = {
         [`${id}/${id}.kn5`]: kn5,
         // AI spline left out until its format is confirmed against a file recorded in game (v7 crashed AC on load).
-        ...(INCLUDE_AI ? { [`${id}/ai/fast_lane.ai`]: ai } : {}),
+        ...((input.includeAi ?? INCLUDE_AI) ? { [`${id}/ai/fast_lane.ai`]: ai } : {}),
         [`${id}/data/surfaces.ini`]: enc.encode(surfacesIni()),
         [`${id}/data/cameras.ini`]: enc.encode(cameras),
         [`${id}/data/map.ini`]: enc.encode(mapIni),
@@ -152,7 +173,7 @@ export function buildTrack(input: BuildInput): BuildResult {
         [`${id}/ui/ui_track.json`]: enc.encode(JSON.stringify(uiTrack, null, 2)),
         [`${id}/ui/outline.png`]: thumb(400, 400, [0, 0, 0, 0], [255, 255, 255, 255], 4),
         [`${id}/ui/preview.png`]: thumb(640, 360, [18, 18, 20, 255], [212, 36, 40, 255], 4),
-        [`${id}/README.txt`]: enc.encode(`${input.name}\n\nInstall: unzip so this folder sits in assettocorsa/content/tracks/${id}, then pick the track in Content Manager.\nPoint to point: start at the first pins, finish at the last. Road data (c) OpenStreetMap contributors (ODbL).\n`),
+        [`${id}/README.txt`]: enc.encode(`${input.name}\n\nInstall: unzip so this folder sits in assettocorsa/content/tracks/${id}, then pick the track in Content Manager.\n${circuit ? `Circuit, ${clockwise ? 'clockwise' : 'counter-clockwise'}; the start/finish line is at the first point of the trace.` : 'Point to point: start at the first pins, finish at the last.'} Road data (c) OpenStreetMap contributors (ODbL).\n`),
     };
     log('Packing the zip');
     const zip = zipSync(files, { level: 6 });

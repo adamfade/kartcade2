@@ -8,7 +8,9 @@ import { buildTrack } from '../pack.ts';
 import { polylineLength } from '../geo.ts';
 import { readKn5 } from './kn5Reader.ts';
 import type { ReadNode } from './kn5Reader.ts';
-import { slopedTerrain, windingRoad } from './fixtures.ts';
+import { flatLot, kartCircuit, slopedTerrain, windingRoad } from './fixtures.ts';
+import { writeFastLane } from '../aiLine.ts';
+import { parseTrace, rotateLoopTo } from '../trace.ts';
 
 test('centerline is evenly spaced, ends at the pins and keeps the length', () => {
     const road = windingRoad();
@@ -84,4 +86,105 @@ test('full build: KN5 round-trips, meshes are valid, AI and zip are complete', (
     assert.match(ui.description, /OpenStreetMap contributors/);
     const raw = polylineLength(windingRoad());
     assert.ok(Math.abs(res.stats.lengthM - raw) / raw < 0.05, `length ${res.stats.lengthM} vs ${raw}`);
+});
+
+test('AI line ends with the v7 has-grid flag', () => {
+    const pts = Array.from({ length: 10 }, (_, i) => ({ x: i * 2, y: 0, z: 0 }));
+    const buf = writeFastLane(pts, { halfWidth: 3 });
+    assert.equal(buf.length, 16 + 10 * 20 + 4 + 10 * 72 + 4);
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    assert.equal(dv.getInt32(0, true), 7);
+    assert.equal(dv.getInt32(16 + 10 * 20, true), 10, 'extra count');
+    assert.equal(dv.getInt32(buf.length - 4, true), 0, 'has-grid flag');
+});
+
+test('closed centreline: evenly spaced loop, wraps tangents and curvature', () => {
+    const cl = buildCenterline(kartCircuit(), { spacing: 1, closed: true });
+    assert.equal(cl.closed, true);
+    const n = cl.points.length;
+    const gap = Math.hypot(cl.points[0].x - cl.points[n - 1].x, cl.points[0].y - cl.points[n - 1].y);
+    assert.ok(Math.abs(gap - cl.length / n) < 0.2, `closing gap ${gap}`);
+    assert.ok(cl.length > 850 && cl.length < 1150, `lap ${cl.length}`);
+    // Total turning of a simple counter-clockwise loop is +2π.
+    let turn = 0;
+    for (let i = 0; i < n; i++) { const a = cl.tangents[i], b = cl.tangents[(i + 1) % n]; turn += Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y); }
+    assert.ok(Math.abs(turn - 2 * Math.PI) < 0.05, `total turn ${turn}`);
+    assert.ok(cl.curvature.every(Number.isFinite));
+});
+
+test('circuit build: closed meshes, lap gate, grid, closed AI line, no end walls', () => {
+    const res = buildTrack({ name: 'Test Kart Circuit', polyline: kartCircuit(), heightSampler: flatLot, width: 8, circuit: true });
+    const names = res.geometry.parts.map((p) => p.name);
+    assert.ok(!names.includes('1WALL_ENDA') && !names.includes('1WALL_ENDB'));
+    const dn = res.geometry.dummies.map((d) => d.name);
+    for (const want of ['AC_TIME_0_L', 'AC_TIME_0_R', 'AC_START_0', 'AC_START_11', 'AC_PIT_0', 'AC_PIT_11', 'AC_HOTLAP_START_0']) assert.ok(dn.includes(want), `missing ${want}`);
+    assert.ok(!dn.some((d) => d.startsWith('AC_AB_')), 'no A-to-B gates on a circuit');
+    // Grid sits behind the line, facing the direction of travel.
+    const t0 = res.centerline.tangents[0], line = res.geometry.dummies.find((d) => d.name === 'AC_TIME_0_L')!;
+    const g0 = res.geometry.dummies.find((d) => d.name === 'AC_START_0')!;
+    const along = (g0.position[0] - line.position[0]) * t0.x + (g0.position[2] - line.position[2]) * t0.y;
+    assert.ok(along < -3, `pole is ${along} m from the line`);
+    assert.ok(g0.forward[0] * t0.x + g0.forward[2] * t0.y > 0.9);
+    // The road strip closes: its last row is its first row.
+    const road = res.geometry.parts.filter((p) => p.name.startsWith('1ROAD'));
+    const first = road[0].positions.slice(0, 3), lastPart = road[road.length - 1];
+    const last = lastPart.positions.slice(-15, -12);
+    assert.ok(Math.hypot(first[0] - last[0], first[2] - last[2]) < 1e-6, 'road loop joins');
+    const k = readKn5(res.files['test_kart_circuit/test_kart_circuit.kn5']);
+    assert.equal(k.consumed, k.total);
+    const ui = JSON.parse(new TextDecoder().decode(res.files['test_kart_circuit/ui/ui_track.json']));
+    assert.equal(ui.run, 'counter-clockwise');
+    assert.equal(ui.pitboxes, '12');
+    // Reversed: same loop, clockwise, same start/finish point.
+    const rev = buildTrack({ name: 'Rev', polyline: kartCircuit(), heightSampler: flatLot, width: 8, circuit: true, reverse: true });
+    assert.equal(JSON.parse(new TextDecoder().decode(rev.files['rev/ui/ui_track.json'])).run, 'clockwise');
+    assert.ok(Math.hypot(rev.centerline.points[0].x - res.centerline.points[0].x, rev.centerline.points[0].y - res.centerline.points[0].y) < 3);
+});
+
+test('verges from neighbouring sections never overlap', () => {
+    const res = buildTrack({ name: 'Verge', polyline: kartCircuit(), heightSampler: flatLot, width: 8, circuit: true });
+    const cl = res.centerline, n = cl.points.length;
+    // Each grass vertex must be at least as close to its own section of centreline as to any part of the
+    // loop that is far along the track (allowing 1 m slack).
+    let bad = 0;
+    for (const part of res.geometry.parts.filter((p) => p.name.startsWith('1GRASS'))) {
+        const cols = 6, rows = part.positions.length / 3 / cols;
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const v = (r * cols + c) * 3, x = part.positions[v], z = part.positions[v + 2];
+            let best = Infinity, bestI = 0;
+            for (let i = 0; i < n; i++) { const d = Math.hypot(cl.points[i].x - x, cl.points[i].y - z); if (d < best) { best = d; bestI = i; } }
+            // Distance to the nearest centreline point within 20 m of track of the nearest one.
+            let own = Infinity;
+            for (let k = -60; k <= 60; k++) { const i = (bestI + k + n) % n; own = Math.min(own, Math.hypot(cl.points[i].x - x, cl.points[i].y - z)); }
+            if (own > best + 1) bad++;
+        }
+    }
+    assert.equal(bad, 0);
+    // And the clipping actually happened: the straights 30 m apart can't both keep a 25 m verge.
+    const outer = res.geometry.parts.filter((p) => p.name.startsWith('1GRASS_R')).flatMap((part) => {
+        const cols = 6, rows = part.positions.length / 3 / cols, out: number[] = [];
+        for (let r = 0; r < rows; r++) {
+            const a = (r * cols) * 3, b = (r * cols + cols - 1) * 3;
+            out.push(Math.hypot(part.positions[b] - part.positions[a], part.positions[b + 2] - part.positions[a + 2]));
+        }
+        return out;
+    });
+    assert.ok(outer.some((w) => w < 15), 'some verges were clipped');
+    assert.ok(outer.some((w) => w > 24), 'open verges keep their full width');
+});
+
+test('trace files: GPX, KML and GeoJSON', () => {
+    const gpx = `<?xml version="1.0"?><gpx><trk><name>Lap</name><trkseg><trkpt lat="45.1" lon="-123.1"/><trkpt lat="45.2" lon="-123.2"></trkpt><trkpt lat='45.3' lon='-123.3'/></trkseg></trk></gpx>`;
+    const g = parseTrace(gpx);
+    assert.equal(g.format, 'gpx'); assert.equal(g.line.length, 3); assert.equal(g.name, 'Lap'); assert.equal(g.line[1].lon, -123.2);
+    const kml = `<kml><Placemark><Point><coordinates>-123,45</coordinates></Point></Placemark><Placemark><name>Track</name><LineString><coordinates>-123.1,45.1,0 -123.2,45.2,0\n -123.3,45.3,0</coordinates></LineString></Placemark></kml>`;
+    const k = parseTrace(kml);
+    assert.equal(k.format, 'kml'); assert.equal(k.line.length, 3); assert.equal(k.line[2].lat, 45.3);
+    const gj = JSON.stringify({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: { name: 'Mac' }, geometry: { type: 'Polygon', coordinates: [[[-123.1, 45.1], [-123.2, 45.2], [-123.3, 45.1], [-123.1, 45.1]]] } }] });
+    const j = parseTrace(gj);
+    assert.equal(j.format, 'geojson'); assert.equal(j.line.length, 4); assert.equal(j.name, 'Mac');
+    const rot = rotateLoopTo(j.line, { lat: 45.2, lon: -123.2 });
+    assert.equal(rot.length, 3, 'closing point dropped');
+    assert.deepEqual(rot[0], { lat: 45.2, lon: -123.2 });
+    assert.throws(() => parseTrace('hello'));
 });

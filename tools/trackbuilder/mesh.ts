@@ -27,8 +27,10 @@ export interface MeshOptions {
     wallHeight?: number;
     /** Ground height in metres at a local point (x east, y north), for shaping the verge. */
     ground?: (x: number, y: number) => number | null;
-    /** Flip the spawn direction if a build shows cars facing backwards. */
+    /** Flip the spawn direction if a build shows cars facing backwards (point-to-point only). */
     flipStart?: boolean;
+    /** Circuit: number of grid slots and pit boxes (default 12). */
+    gridSlots?: number;
 }
 
 export interface TrackGeometry { parts: MeshPart[]; dummies: Dummy[]; roadHeightAt: (i: number, lateral: number) => number }
@@ -102,6 +104,39 @@ function wallPart(name: string, material: string, base: V3[], height: number): M
 
 function smoothstep(t: number) { const x = Math.max(0, Math.min(1, t)); return x * x * (3 - 2 * x); }
 
+/**
+ * How far the verge may reach from the centreline on one side before it meets another part of the same
+ * road (the other leg of a hairpin, a parallel straight on a kart track). A point at lateral offset d is
+ * closer to this section's centreline than to a far point P_j while d <= |v|^2 / (2 v.r), v = P_j - P_i.
+ * "Far" means the path between them is much longer than the straight line, so neighbours along the same
+ * stretch of road never count.
+ */
+function clearanceToOtherSections(cl: Centerline, maxReach: number): { left: number[]; right: number[] } {
+    const n = cl.points.length, P = cl.points;
+    const left = new Array(n).fill(Infinity), right = new Array(n).fill(Infinity);
+    const cell = Math.max(10, 2 * maxReach); // the 3x3 cells around a point then cover every candidate within 2 * maxReach
+    const grid = new Map<string, number[]>();
+    const key = (x: number, y: number) => `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+    P.forEach((p, i) => { const k = key(p.x, p.y); let b = grid.get(k); if (!b) grid.set(k, (b = [])); b.push(i); });
+    const arc = (i: number, j: number) => { const d = Math.abs(cl.s[j] - cl.s[i]); return cl.closed ? Math.min(d, cl.length - d) : d; };
+    for (let i = 0; i < n; i++) {
+        const p = P[i], r = { x: cl.tangents[i].y, y: -cl.tangents[i].x };
+        const cx = Math.floor(p.x / cell), cy = Math.floor(p.y / cell);
+        for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+            for (const j of grid.get(`${gx},${gy}`) ?? []) {
+                const vx = P[j].x - p.x, vy = P[j].y - p.y;
+                const d2 = vx * vx + vy * vy, d = Math.sqrt(d2);
+                if (d > maxReach * 2 || arc(i, j) < 1.6 * d + 8) continue;
+                const vr = vx * r.x + vy * r.y;
+                if (Math.abs(vr) < 1e-6) continue;
+                const lim = d2 / (2 * Math.abs(vr));
+                if (vr > 0) right[i] = Math.min(right[i], lim); else left[i] = Math.min(left[i], lim);
+            }
+        }
+    }
+    return { left, right };
+}
+
 export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptions): TrackGeometry {
     const W = opts.width, half = W / 2;
     const shoulder = opts.shoulder ?? 1;
@@ -109,20 +144,29 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     const crown = opts.crown ?? 0.02;
     const maxBank = Math.tan(((opts.maxBankDeg ?? 4) * Math.PI) / 180);
     const n = cl.points.length;
+    const closed = cl.closed;
+    // Rows of the strip meshes: a circuit repeats row 0 at the end so the strips join at the line.
+    const rowCount = closed ? n + 1 : n;
+    const ix = (i: number) => (closed ? ((i % n) + n) % n : Math.max(0, Math.min(n - 1, i)));
+    const sRow = (i: number) => (i === n ? cl.length : cl.s[i]); // distance for UVs, continuous across the seam
 
     // Superelevation: proportional to curvature, capped. Positive bank raises the right side (left turn).
     const bank = cl.curvature.map((k) => Math.max(-maxBank, Math.min(maxBank, k * 12)));
 
-    // Inner-side reach is limited by the turn radius so the verge never folds over itself.
+    // Inner-side reach is limited by the turn radius so the verge never folds over itself, and by the
+    // distance to other parts of the road so verges from neighbouring sections never overlap.
+    const other = clearanceToOtherSections(cl, half + shoulder + verge);
     const reach = (i: number, side: -1 | 1) => {
         let r = verge;
         for (let k = -15; k <= 15; k++) {
-            const j = i + k; if (j < 0 || j >= n) continue;
-            const kk = cl.curvature[j];
+            const j = i + k; if (!closed && (j < 0 || j >= n)) continue;
+            const kk = cl.curvature[ix(j)];
             // Turning left (kk>0) the inside is the left side (-1).
             if ((kk > 0 && side === -1) || (kk < 0 && side === 1)) r = Math.min(r, 0.8 / Math.abs(kk) - half - shoulder);
         }
-        return Math.max(2, r);
+        const o = (side === -1 ? other.left : other.right)[i];
+        if (Number.isFinite(o)) r = Math.min(r, o - half - shoulder - 0.5);
+        return Math.max(0.5, r);
     };
 
     const right = (i: number) => ({ x: cl.tangents[i].y, y: -cl.tangents[i].x });
@@ -135,12 +179,12 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
 
     // Road: five columns across.
     const roadCols = [-half, -half / 2, 0, half / 2, half];
-    const roadRows = Array.from({ length: n }, (_, i) => roadCols.map((lat) => at(i, lat, surf(i, lat))));
-    const tangent3 = (i: number): V3 => [right(i).x, 0, right(i).y];
-    const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [(roadCols[j] + half) / W, cl.s[i] / 8], tangent3);
+    const roadRows = Array.from({ length: rowCount }, (_, i) => roadCols.map((lat) => at(ix(i), lat, surf(ix(i), lat))));
+    const tangent3 = (i: number): V3 => { const r = right(ix(i)); return [r.x, 0, r.y]; };
+    const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [(roadCols[j] + half) / W, sRow(i) / 8], tangent3);
 
     // Grass both sides: from the road edge outward, blending into the ground.
-    const sideRows = (side: -1 | 1) => Array.from({ length: n }, (_, i) => {
+    const sideRow = (i: number, side: -1 | 1) => {
         const edge = surf(i, side * half);
         const lim = reach(i, side);
         const offs = [0, shoulder, shoulder + 3, shoulder + 10, shoulder + 22, shoulder + verge].map((d) => Math.min(d, lim + shoulder));
@@ -158,46 +202,94 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
             return p;
         });
         return side === -1 ? pts.reverse() : pts; // columns left -> right
-    });
-    const L = sideRows(-1), R = sideRows(1);
-    parts.push(...gridParts('1GRASS_L', 'grass', L, (i, j) => [L[i][j][0] / 10, cl.s[i] / 10], tangent3));
-    parts.push(...gridParts('1GRASS_R', 'grass', R, (i, j) => [R[i][j][0] / 10, cl.s[i] / 10], tangent3));
+    };
+    const Lr = Array.from({ length: n }, (_, i) => sideRow(i, -1)), Rr = Array.from({ length: n }, (_, i) => sideRow(i, 1));
+    const L = Array.from({ length: rowCount }, (_, i) => Lr[ix(i)]), R = Array.from({ length: rowCount }, (_, i) => Rr[ix(i)]);
+    parts.push(...gridParts('1GRASS_L', 'grass', L, (i, j) => [L[i][j][0] / 10, sRow(i) / 10], tangent3));
+    parts.push(...gridParts('1GRASS_R', 'grass', R, (i, j) => [R[i][j][0] / 10, sRow(i) / 10], tangent3));
 
     if (opts.walls ?? true) {
         const h = opts.wallHeight ?? 2.5;
         parts.push(wallPart('1WALL_L', 'wall', L.map((r) => r[0]), h));
         parts.push(wallPart('1WALL_R', 'wall', R.map((r) => r[r.length - 1]), h));
-        // Cap the two ends so cars can't drive off the start or the finish.
-        const capAt = (i: number, flip: boolean) => {
-            const row = [...L[i], ...R[i]];
-            return wallPart(`1WALL_END${flip ? 'B' : 'A'}`, 'wall', row, h);
-        };
-        parts.push(capAt(Math.min(n - 1, 0), false), capAt(n - 1, true));
+        if (!closed) {
+            // Cap the two ends so cars can't drive off the start or the finish.
+            const capAt = (i: number, flip: boolean) => {
+                const row = [...L[i], ...R[i]];
+                return wallPart(`1WALL_END${flip ? 'B' : 'A'}`, 'wall', row, h);
+            };
+            parts.push(capAt(0, false), capAt(n - 1, true));
+        }
     }
 
     // AC dummies. Positions on the road surface; forward = direction of travel.
-    const idxAt = (sM: number) => Math.max(0, Math.min(n - 1, Math.round(sM / cl.spacing)));
+    const on = (i: number, lat: number, up: number): V3 => at(i, lat, surf(i, lat) + up);
     const fwd = (i: number, flip = false): V3 => { const t = cl.tangents[i]; return flip ? [-t.x, 0, -t.y] : [t.x, 0, t.y]; };
-    const flip = !!opts.flipStart;
-    const startI = idxAt(Math.min(12, cl.length * 0.05));
-    const pitI = idxAt(Math.min(6, cl.length * 0.02));
-    const hotI = idxAt(Math.min(4, cl.length * 0.01));
-    const lineA = idxAt(Math.min(25, cl.length * 0.1));
-    const lineB = idxAt(Math.max(cl.length - 25, cl.length * 0.9));
-    const on = (i: number, lat: number, up: number): V3 => { const p = at(i, lat, surf(i, lat) + up); return p; };
-    const dummies: Dummy[] = [
-        { name: 'AC_START_0', position: on(startI, 0, 0.1), forward: fwd(startI, flip) },
-        { name: 'AC_PIT_0', position: on(pitI, 0, 0.1), forward: fwd(pitI, flip) },
-        { name: 'AC_HOTLAP_START_0', position: on(hotI, 0, 0.1), forward: fwd(hotI, flip) },
-        { name: 'AC_TIME_0_L', position: on(lineA, -half - 1, 1), forward: fwd(lineA) },
-        { name: 'AC_TIME_0_R', position: on(lineA, half + 1, 1), forward: fwd(lineA) },
-        { name: 'AC_TIME_1_L', position: on(lineB, -half - 1, 1), forward: fwd(lineB) },
-        { name: 'AC_TIME_1_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
-        // Point-to-point (A to B) timing reads these gates.
-        { name: 'AC_AB_START_L', position: on(lineA, -half - 1, 1), forward: fwd(lineA) },
-        { name: 'AC_AB_START_R', position: on(lineA, half + 1, 1), forward: fwd(lineA) },
-        { name: 'AC_AB_FINISH_L', position: on(lineB, -half - 1, 1), forward: fwd(lineB) },
-        { name: 'AC_AB_FINISH_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
-    ];
+    if (closed) {
+        // Infield and surrounds: a flat grass floor just under the lowest verge, so gaps between clipped
+        // verges (inside the loop) show grass instead of sky. Walls keep cars out of those gaps.
+        let minY = Infinity, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const p of parts) for (let v = 0; v < p.positions.length; v += 3) {
+            minY = Math.min(minY, p.positions[v + 1]);
+            x0 = Math.min(x0, p.positions[v]); x1 = Math.max(x1, p.positions[v]);
+            z0 = Math.min(z0, p.positions[v + 2]); z1 = Math.max(z1, p.positions[v + 2]);
+        }
+        const pad = 150, y = minY - 0.25;
+        const cols = 9, rowsN = 9;
+        const rows: V3[][] = Array.from({ length: rowsN }, (_, r) => Array.from({ length: cols }, (_, c): V3 => [
+            x0 - pad + ((x1 - x0 + 2 * pad) * c) / (cols - 1), y, z0 - pad + ((z1 - z0 + 2 * pad) * r) / (rowsN - 1),
+        ]));
+        parts.push(...gridParts('1GRASS_GROUND', 'grass', rows, (r, c) => [rows[r][c][0] / 10, rows[r][c][2] / 10], () => [1, 0, 0]));
+    }
+
+    const dummies: Dummy[] = closed ? circuitDummies(cl, half, on, fwd, opts.gridSlots ?? 12) : (() => {
+        const idxAt = (sM: number) => Math.max(0, Math.min(n - 1, Math.round(sM / cl.spacing)));
+        const flip = !!opts.flipStart;
+        const startI = idxAt(Math.min(12, cl.length * 0.05));
+        const pitI = idxAt(Math.min(6, cl.length * 0.02));
+        const hotI = idxAt(Math.min(4, cl.length * 0.01));
+        const lineA = idxAt(Math.min(25, cl.length * 0.1));
+        const lineB = idxAt(Math.max(cl.length - 25, cl.length * 0.9));
+        return [
+            { name: 'AC_START_0', position: on(startI, 0, 0.1), forward: fwd(startI, flip) },
+            { name: 'AC_PIT_0', position: on(pitI, 0, 0.1), forward: fwd(pitI, flip) },
+            { name: 'AC_HOTLAP_START_0', position: on(hotI, 0, 0.1), forward: fwd(hotI, flip) },
+            { name: 'AC_TIME_0_L', position: on(lineA, -half - 1, 1), forward: fwd(lineA) },
+            { name: 'AC_TIME_0_R', position: on(lineA, half + 1, 1), forward: fwd(lineA) },
+            { name: 'AC_TIME_1_L', position: on(lineB, -half - 1, 1), forward: fwd(lineB) },
+            { name: 'AC_TIME_1_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
+            // Point-to-point (A to B) timing reads these gates.
+            { name: 'AC_AB_START_L', position: on(lineA, -half - 1, 1), forward: fwd(lineA) },
+            { name: 'AC_AB_START_R', position: on(lineA, half + 1, 1), forward: fwd(lineA) },
+            { name: 'AC_AB_FINISH_L', position: on(lineB, -half - 1, 1), forward: fwd(lineB) },
+            { name: 'AC_AB_FINISH_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
+        ];
+    })();
     return { parts, dummies, roadHeightAt: surf };
+}
+
+/**
+ * Circuit dummies. The start/finish line (AC_TIME_0) is at the first point of the loop. The grid forms up
+ * behind it in a staggered two-by-two, 7 m apart; pit boxes share the grid spots (there is no pit lane,
+ * and practice/qualifying spawn in the pits while races spawn on the grid, so they never overlap in use).
+ */
+function circuitDummies(cl: Centerline, half: number, on: (i: number, lat: number, up: number) => V3, fwd: (i: number) => V3, slots: number): Dummy[] {
+    const n = cl.points.length;
+    const back = (m: number) => ((n - Math.round(m / cl.spacing)) % n + n) % n; // index m metres before the line
+    const spacing = 7, first = 6;
+    const maxSlots = Math.max(1, Math.floor((cl.length * 0.35 - first) / (spacing / 2)) + 1);
+    const count = Math.max(1, Math.min(slots, maxSlots));
+    const lat = Math.min(half / 2, 2.5);
+    const dummies: Dummy[] = [];
+    for (let k = 0; k < count; k++) {
+        const i = back(first + k * (spacing / 2));
+        const side = k % 2 === 0 ? -1 : 1; // pole on the left
+        dummies.push({ name: `AC_START_${k}`, position: on(i, side * lat, 0.1), forward: fwd(i) });
+        dummies.push({ name: `AC_PIT_${k}`, position: on(i, side * lat, 0.1), forward: fwd(i) });
+    }
+    const hot = back(Math.min(120, cl.length * 0.25));
+    dummies.push({ name: 'AC_HOTLAP_START_0', position: on(hot, 0, 0.1), forward: fwd(hot) });
+    dummies.push({ name: 'AC_TIME_0_L', position: on(0, -half - 1, 1), forward: fwd(0) });
+    dummies.push({ name: 'AC_TIME_0_R', position: on(0, half + 1, 1), forward: fwd(0) });
+    return dummies;
 }

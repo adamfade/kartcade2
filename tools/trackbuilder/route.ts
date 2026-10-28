@@ -15,12 +15,16 @@ export interface Centerline {
     curvature: number[];
     length: number;
     spacing: number;
+    /** Circuit: the last point connects back to the first; length includes that closing segment. */
+    closed: boolean;
 }
 
 export interface CenterlineOptions {
     spacing?: number; // metres, default 2
     /** Smoothing radius in metres (Gaussian sigma). Removes the kinks between OSM nodes. Default 6. */
     smoothSigma?: number;
+    /** Treat the polyline as a closed loop (a circuit). A repeated first point at the end is dropped. */
+    closed?: boolean;
 }
 
 function dist(a: Vec2, b: Vec2) {
@@ -50,6 +54,53 @@ export function resample(points: Vec2[], spacing: number): Vec2[] {
     return out;
 }
 
+/** Resample a closed loop at (about) a fixed spacing: n evenly spaced points, no repeated end point. */
+export function resampleClosed(points: Vec2[], spacing: number): Vec2[] {
+    const pts = points.filter((p, i) => i === 0 || dist(p, points[i - 1]) > 1e-6);
+    if (pts.length > 2 && dist(pts[0], pts[pts.length - 1]) < 1e-6) pts.pop();
+    if (pts.length < 3) throw new Error('A circuit needs at least three distinct points');
+    const ring = [...pts, pts[0]];
+    const total = ring.slice(1).reduce((acc, p, i) => acc + dist(ring[i], p), 0);
+    const n = Math.max(3, Math.round(total / spacing));
+    const step = total / n;
+    const out: Vec2[] = [];
+    let seg = 0, segStart = 0, segLen = dist(ring[0], ring[1]);
+    for (let k = 0; k < n; k++) {
+        const target = k * step;
+        while (segStart + segLen < target && seg < ring.length - 2) {
+            segStart += segLen;
+            seg++;
+            segLen = dist(ring[seg], ring[seg + 1]);
+        }
+        const t = segLen > 0 ? (target - segStart) / segLen : 0;
+        out.push({ x: ring[seg].x + (ring[seg + 1].x - ring[seg].x) * t, y: ring[seg].y + (ring[seg + 1].y - ring[seg].y) * t });
+    }
+    return out;
+}
+
+/** Gaussian smoothing of a closed loop (indices wrap). sigma in samples. */
+export function smoothRing(points: Vec2[], sigmaSamples: number): Vec2[] {
+    const n = points.length;
+    if (sigmaSamples <= 0) return points.slice();
+    const r = Math.min(Math.ceil(sigmaSamples * 3), Math.floor((n - 1) / 2));
+    return points.map((_, i) => {
+        let sx = 0, sy = 0, sw = 0;
+        for (let k = -r; k <= r; k++) {
+            const ww = Math.exp(-(k * k) / (2 * sigmaSamples * sigmaSamples));
+            const q = points[(((i + k) % n) + n) % n];
+            sx += q.x * ww; sy += q.y * ww; sw += ww;
+        }
+        return { x: sx / sw, y: sy / sw };
+    });
+}
+
+/** Signed area of a closed loop in local metres (x east, y north): positive = counter-clockwise. */
+export function signedArea(points: Vec2[]): number {
+    let a = 0;
+    for (let i = 0; i < points.length; i++) { const p = points[i], q = points[(i + 1) % points.length]; a += p.x * q.y - q.x * p.y; }
+    return a / 2;
+}
+
 /** Gaussian smoothing of a 2D polyline with fixed end points. sigma in samples. */
 export function smooth2(points: Vec2[], sigmaSamples: number): Vec2[] {
     if (sigmaSamples <= 0) return points.slice();
@@ -74,35 +125,51 @@ export function buildCenterline(polyline: LatLon[], opts: CenterlineOptions = {}
     if (polyline.length < 2) throw new Error('Route needs at least two points');
     const spacing = opts.spacing ?? 2;
     const sigmaM = opts.smoothSigma ?? 6;
+    const closed = !!opts.closed;
     const projection = makeProjection(polyline[0]);
     const local = polyline.map((p) => projection.toLocal(p));
     // Dense resample first so smoothing works in metres, then smooth, then final resample.
-    let pts = resample(local, 1);
-    pts = smooth2(pts, sigmaM);
-    pts = resample(pts, spacing);
+    let pts: Vec2[];
+    if (closed) {
+        pts = resampleClosed(local, 1);
+        pts = smoothRing(pts, sigmaM);
+        pts = resampleClosed(pts, spacing);
+    } else {
+        pts = resample(local, 1);
+        pts = smooth2(pts, sigmaM);
+        pts = resample(pts, spacing);
+    }
     const n = pts.length;
+    // Neighbour index: wraps on a circuit, clamps at the ends of a road.
+    const nb = (i: number) => (closed ? ((i % n) + n) % n : Math.max(0, Math.min(n - 1, i)));
     const s: number[] = [0];
     for (let i = 1; i < n; i++) s.push(s[i - 1] + dist(pts[i - 1], pts[i]));
+    const length = closed ? s[n - 1] + dist(pts[n - 1], pts[0]) : s[n - 1];
+    // Arc distance between neighbours (handles the wrap at the start/finish line).
+    const arc = (a: number, b: number) => { let d = s[b] - s[a]; if (closed && d < 0) d += length; return d; };
     const tangents = pts.map((_, i) => {
-        const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+        const a = pts[nb(i - 1)], b = pts[nb(i + 1)];
         const l = dist(a, b) || 1;
         return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
     });
     const curvature = pts.map((_, i) => {
-        if (i === 0 || i === n - 1) return 0;
-        const t0 = tangents[i - 1], t1 = tangents[i + 1];
+        if (!closed && (i === 0 || i === n - 1)) return 0;
+        const t0 = tangents[nb(i - 1)], t1 = tangents[nb(i + 1)];
         const cross = t0.x * t1.y - t0.y * t1.x;
         const dot = t0.x * t1.x + t0.y * t1.y;
         const ang = Math.atan2(cross, dot);
-        return ang / (s[i + 1] - s[i - 1] || 1);
+        return ang / (arc(nb(i - 1), nb(i + 1)) || 1);
     });
     // Light smoothing of curvature so banking doesn't twitch.
     const kSm = curvature.map((_, i) => {
         let a = 0, c = 0;
-        for (let k = -3; k <= 3; k++) { const j = i + k; if (j >= 0 && j < n) { a += curvature[j]; c++; } }
+        for (let k = -3; k <= 3; k++) {
+            const j = i + k;
+            if (closed) { a += curvature[nb(j)]; c++; } else if (j >= 0 && j < n) { a += curvature[j]; c++; }
+        }
         return a / c;
     });
-    return { projection, points: pts, s, tangents, curvature: kSm, length: s[n - 1], spacing };
+    return { projection, points: pts, s, tangents, curvature: kSm, length, spacing, closed };
 }
 
 /** Road width in metres from OSM way tags. */

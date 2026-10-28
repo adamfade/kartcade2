@@ -10,6 +10,12 @@ npm run track -- --name "Pete's Mountain Rd" \
   --out ./tracks
 ```
 
+A circuit, from a traced lap (GPX, KML or GeoJSON):
+
+```
+npm run track -- --circuit --name "Mac Track" --trace mac_track.geojson --width 8 --out ./tracks
+```
+
 This writes `./tracks/petes_mountain_rd.zip` plus the unzipped `./tracks/petes_mountain_rd/` folder, and prints the
 stats as JSON.
 
@@ -23,7 +29,13 @@ stats as JSON.
 | `--from "place"` / `--to "place"` | Geocode the start/end with Nominatim instead of coordinates. |
 | `--width 7` | Road width in metres (skips the OSM lookup). |
 | `--no-overpass` | Don't ask Overpass for width/lanes; use 6.5 m unless `--width` is given. |
-| `--flip-start` | Reverse the spawn direction if cars face backwards in game. |
+| `--flip-start` | Reverse the spawn direction if cars face backwards in game (roads). |
+| `--circuit` | Build a closed lap track. Needs `--trace`, or `--start` plus `--via` pins around the loop (joined directly, not routed). |
+| `--trace file` | GPX (track, route or waypoints), KML (longest line) or GeoJSON (longest LineString or a Polygon's outer ring). Without `--circuit` it builds a road from the trace instead of routing. |
+| `--start lat,lon` with `--trace --circuit` | Moves the start/finish line to the trace point nearest this. |
+| `--reverse` | Drive it the other way. A circuit keeps its start/finish point. |
+| `--grid 12` | Circuit grid slots and pit boxes (default 12). |
+| `--with-ai` | Include `ai/fast_lane.ai`, which is off by default until a rig test confirms it. For test builds. |
 | `--out dir` | Output folder (default `./tracks-out`). |
 
 ## Network
