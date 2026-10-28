@@ -16,6 +16,8 @@ export interface MeshPart {
     /** Drawn in game (default true). Invisible physics meshes give collision without a visible wall. */
     visible?: boolean;
     castShadows?: boolean;
+    /** Draw distance in metres (0 / absent = always). Used for far vegetation and buildings. */
+    lodOut?: number;
 }
 
 export interface Dummy { name: string; position: V3; forward: V3 }

@@ -13,7 +13,9 @@ This file says how the pieces fit, so new stages slot in without rework. Keep it
    - material library: Storage `trackbuilder/library/<version>/<role>/{albedo,detail,normal,maps}.dds` + `manifest.json`
    - site data: Storage `trackbuilder/sites/<siteId>/` (siteId = hash of the route line, so projects on the same road
      share it): `manifest.json` (plan, fetch date, files), per cell `dem.png` (Terrarium-encoded 1 m DEM),
-     `rgb.jpg` (NAIP 0.5 m), `nir.jpg` (near-infrared), and `overview/` (coarser DEM + imagery)
+     `rgb.jpg` (NAIP 0.5 m), `nir.jpg` (near-infrared), `overview/` (coarser DEM + imagery), and `osm.json.gz`
+     (OpenStreetMap buildings, woods, trees, barriers and water over the overview square; sites stored before it
+     existed get it on their next load)
    - projects: Firestore `trackProjects`
 3. **Licences we can ship.** Only CC0 / public-domain / ODbL-with-attribution data goes into a track:
    Poly Haven (CC0), USGS 3DEP and NAIP (public domain), OpenStreetMap (ODbL, credited in ui_track.json).
@@ -43,7 +45,13 @@ planar for verge and terrain, so aerial imagery can be the macro later). Paint i
 the asphalt with no physics.
 
 Library roles (`LIBRARY_CATALOG`): asphalt, asphalt_track, gravel, grass, dirt, forest_floor, rock, concrete,
-bark. Without an imported library, `proceduralEntry` supplies stand-ins with the same layout.
+bark, siding, roof, metal_roof, brick, wood. Without an imported library, `proceduralEntry` supplies stand-ins with
+the same layout. Adding a role means re-running Import materials on the admin page.
+
+Buildings and barriers use the same NMDetail recipe: the macro carries colour and windows (window texels have
+alpha 1, so no siding grain on the glass) and the library supplies siding, brick, shingle or steel detail. Trees are
+`ksPerPixelAT` billboards (two crossed double-sided quads, normals up) on a BC3 atlas whose mips preserve alpha
+coverage (`MipKind 'cutout'`), so forests don't thin out with distance.
 
 ## Stages
 
@@ -53,7 +61,7 @@ bark. Without an imported library, `proceduralEntry` supplies stand-ins with the
 | 2 | Street View reference links in the editor | done |
 | 3 | Site data: USGS 3DEP 1 m elevation and NAIP aerial imagery (RGB + near-infrared), fetched in the browser and stored per route (`site.ts`, `siteStore.ts`); verge follows the lidar ground; aerial photo as the verge/terrain macro per 512 m cell with the road painted out (`ground.ts`); invisible boundary walls | done |
 | 3b | Surface classes from imagery (forest floor, dirt, gravel drives), tree placement from near-infrared, a distant low-res terrain ring to the horizon | planned |
-| 4 | OpenStreetMap features: buildings (footprints, heights, roofs), woods (dense billboard trees), mapped barriers and fences, water; all spatially chunked | planned |
+| 4 | OpenStreetMap features (`osm.ts`, `features.ts`): buildings from footprints with levels/height tags, gable roofs on rectangles, hip otherwise, flat on big buildings; woods filled with billboard trees (denser near the road, smaller where they would overhang it, far ones thinned and LOD'd out); single trees and tree rows; guard rails, fences, walls and hedges with gaps at the road. Chunked into 256 m cells; collision (`1WALL_*`) only within 45 m of the road. Water is fetched and stored for stage 3b | done |
 | 5 | Vegetation and detail: billboard tree species, GrassFX tuning, LODs, roadside clutter (mailboxes, posts, signs from reference) | planned |
 
 ## Builds

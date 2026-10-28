@@ -82,6 +82,11 @@ Model details:
 - **Terrain:** every build includes the surrounding ground from the same elevation data (`terrain.ts`, visual only,
   `TERRAIN_n`), pushed below the track near it so it never shows through. Elevation tiles are fetched with a
   400 m margin for it.
+- **Surroundings (with Real ground on):** buildings, woods, single trees, tree rows, guard rails, fences, walls
+  and hedges from OpenStreetMap (`osm.ts`, `features.ts`), fetched once per site from the Overpass API in the
+  browser and stored as `osm.json.gz` with the site data. Buildings get real footprints and roofs; woods become
+  billboard trees; nothing is placed on the road or shoulder. Credited in `ui_track.json` (ODbL). See
+  ARCHITECTURE.md for the full pipeline.
 
 ## Circuit mode
 

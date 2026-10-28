@@ -14,6 +14,8 @@ import type { MarkingPlan } from './mesh.ts';
 import type { Kn5Material, Kn5Texture } from './kn5.ts';
 import { buildElements } from './elements.ts';
 import { buildTerrain } from './terrain.ts';
+import { buildFeatures } from './features.ts';
+import type { FeatureStats } from './features.ts';
 import { siteHeightSampler } from './site.ts';
 import type { SiteRasters } from './site.ts';
 import { aerialMacro, siteRegions, splitByRegion } from './ground.ts';
@@ -71,6 +73,9 @@ export interface BuildResult {
     elements: ElementBuild;
     /** Visual terrain meshes (also inside the KN5). */
     terrain: MeshPart[];
+    /** OpenStreetMap buildings, trees and barriers (also inside the KN5). */
+    features: MeshPart[];
+    featureStats: FeatureStats;
     /** The base textures and materials (road, grass, wall), for previews. */
     textures: Kn5Texture[];
     materials: Kn5Material[];
@@ -198,17 +203,25 @@ export function buildTrack(input: BuildInput): BuildResult {
         geometry.parts = [...geometry.parts.filter((p) => !p.name.startsWith('1GRASS_')), ...splitByRegion(verge, regions, cl.projection, materialOf)];
         terrain = splitByRegion(terrain, regions, cl.projection, materialOf);
     }
+    // Surroundings from OpenStreetMap: buildings, woods and trees, mapped barriers.
+    let features: MeshPart[] = [];
+    let featureStats: FeatureStats = { buildings: 0, trees: 0, barriers: 0 };
+    if (site?.osm) {
+        const f = buildFeatures(cl, geometry, site.osm, sampler, book, input.library);
+        features = f.parts; featureStats = f.stats;
+        log(`Adding ${f.stats.buildings} buildings, ${f.stats.trees} trees and ${f.stats.barriers} barriers from OpenStreetMap`);
+    }
     const textures = book.textures, materials = book.materials;
     const lengthM = Math.round(cl.length);
-    const stats = { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles };
+    const stats = { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles: triangles + features.reduce((a, p) => a + p.indices.length / 3, 0) };
     if (input.output === 'geometry') {
-        return { id, files: {}, zip: new Uint8Array(0), centerline: cl, profile, geometry, elements, terrain, textures, materials, stats };
+        return { id, files: {}, zip: new Uint8Array(0), centerline: cl, profile, geometry, elements, terrain, features, featureStats, textures, materials, stats };
     }
     log('Writing the KN5 model');
     const kn5 = writeKn5({
         textures: [...textures, ...elements.textures],
         materials: [...materials, ...elements.materials],
-        meshes: [...geometry.parts, ...elements.parts, ...terrain],
+        meshes: [...geometry.parts, ...elements.parts, ...terrain, ...features],
         dummies: geometry.dummies,
     });
 
@@ -246,7 +259,7 @@ export function buildTrack(input: BuildInput): BuildResult {
 
     const uiTrack = {
         name: input.name,
-        description: `${input.name}, built from the real ${circuit ? 'circuit' : 'road'}. ${circuit ? `Circuit, ${(cl.length / 1000).toFixed(2)} km lap, ${pitboxes} pit boxes` : `Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb`}. Road data © OpenStreetMap contributors (ODbL); ${lidar ? 'elevation USGS 3DEP 1 m lidar, imagery USDA NAIP (public domain)' : 'elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM)'}; materials Poly Haven (CC0). Made for Kartcade.`,
+        description: `${input.name}, built from the real ${circuit ? 'circuit' : 'road'}. ${circuit ? `Circuit, ${(cl.length / 1000).toFixed(2)} km lap, ${pitboxes} pit boxes` : `Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb`}. Road${site?.osm ? ', building, woodland and barrier' : ''} data © OpenStreetMap contributors (ODbL); ${lidar ? 'elevation USGS 3DEP 1 m lidar, imagery USDA NAIP (public domain)' : 'elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM)'}; materials Poly Haven (CC0). Made for Kartcade.`,
         tags: circuit ? ['circuit', 'real track', 'Oregon', 'Kartcade'] : ['point to point', 'real road', 'Oregon', 'Kartcade'],
         geotags: [input.polyline[0].lat.toFixed(5), input.polyline[0].lon.toFixed(5)],
         country: input.country ?? 'USA',
@@ -292,6 +305,6 @@ export function buildTrack(input: BuildInput): BuildResult {
     log('Packing the zip');
     const zip = zipSync(files, { level: 6 });
     return {
-        id, files, zip, centerline: cl, profile, geometry, elements, terrain, textures, materials, stats,
+        id, files, zip, centerline: cl, profile, geometry, elements, terrain, features, featureStats, textures, materials, stats,
     };
 }

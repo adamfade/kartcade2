@@ -109,7 +109,7 @@ export function writeKn5(opts: { textures: Kn5Texture[]; materials: Kn5Material[
         for (const i of m.indices) w.u16(i);
         w.i32(mi);
         w.i32(0); // layer
-        w.f32(0); w.f32(0); // lodIn, lodOut (0 = always drawn)
+        w.f32(0); w.f32(m.lodOut ?? 0); // lodIn, lodOut (0 = always drawn)
         cx /= vc || 1; cy /= vc || 1; cz /= vc || 1;
         let r = 0;
         for (let v = 0; v < vc; v++) r = Math.max(r, Math.hypot(m.positions[v * 3] - cx, m.positions[v * 3 + 1] - cy, m.positions[v * 3 + 2] - cz));

@@ -133,7 +133,9 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
         } else {
             const map = slot('txDiffuse');
             if (map) map.colorSpace = THREE.SRGBColorSpace;
-            matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide }));
+            // Alpha-tested (tree billboards): cut out at 0.5 like AC's ksAlphaRef.
+            const cut = m.alphaTested || m.shader === 'ksPerPixelAT';
+            matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide, alphaTest: cut ? 0.5 : 0, transparent: false }));
         }
     }
     for (const p of parts) {
@@ -398,7 +400,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
     useEffect(() => {
         const t = three.current; if (!t) return;
         t.base?.dispose(); if (t.base) t.scene.remove(t.base.group);
-        t.base = groupFrom([...build.geometry.parts, ...build.terrain], build.materials, build.textures, t.renderer);
+        t.base = groupFrom([...build.geometry.parts, ...build.terrain, ...(build.features ?? [])], build.materials, build.textures, t.renderer);
         t.scene.add(t.base.group);
         // Route highlight for the overview: a fat red line just above the road, drawn on top.
         if (t.route) { t.scene.remove(t.route); t.route.geometry.dispose(); (t.route.material as LineMaterial).dispose(); }

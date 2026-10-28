@@ -3,7 +3,8 @@
 // Pure TypeScript so the same code runs in the browser (admin page, worker) and in Node (CLI, tests).
 
 export type DdsFormat = 'bc1' | 'bc3';
-export type MipKind = 'color' | 'normal' | 'linear';
+/** `cutout`: alpha-tested colour (foliage): colour averaged by alpha, alpha rescaled per level to keep coverage. */
+export type MipKind = 'color' | 'normal' | 'linear' | 'cutout';
 
 export interface Rgba { width: number; height: number; data: Uint8Array } // RGBA8, row-major
 
@@ -21,7 +22,12 @@ export function downsample(src: Rgba, kind: MipKind): Rgba {
         const y0 = Math.min(src.height - 1, y * 2), y1 = Math.min(src.height - 1, y * 2 + 1);
         const idx = [(y0 * sw + x0) * 4, (y0 * sw + x1) * 4, (y1 * sw + x0) * 4, (y1 * sw + x1) * 4];
         const o = (y * w + x) * 4;
-        if (kind === 'color') {
+        if (kind === 'cutout') {
+            // Alpha-weighted, so transparent texels never darken the foliage edge.
+            let wsum = 0; const acc = [0, 0, 0];
+            for (const i of idx) { const a = s[i + 3] + 1; wsum += a; for (let c = 0; c < 3; c++) acc[c] += toLin[s[i + c]] * a; }
+            for (let c = 0; c < 3; c++) out[o + c] = toSrgb(acc[c] / wsum);
+        } else if (kind === 'color') {
             for (let c = 0; c < 3; c++) out[o + c] = toSrgb((toLin[s[idx[0] + c]] + toLin[s[idx[1] + c]] + toLin[s[idx[2] + c]] + toLin[s[idx[3] + c]]) / 4);
         } else if (kind === 'normal') {
             let nx = 0, ny = 0, nz = 0;
@@ -36,9 +42,33 @@ export function downsample(src: Rgba, kind: MipKind): Rgba {
     return { width: w, height: h, data: out };
 }
 
+const coverage = (img: Rgba) => {
+    let n = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i] >= 128) n++;
+    return n / (img.width * img.height);
+};
+
 export function mipChain(img: Rgba, kind: MipKind): Rgba[] {
     const levels = [img];
-    while (levels[levels.length - 1].width > 1 || levels[levels.length - 1].height > 1) levels.push(downsample(levels[levels.length - 1], kind));
+    // Box-filtered alpha thins alpha-tested foliage in the distance; rescale each level's alpha so the share of
+    // texels passing the 0.5 cut-off matches the full-size texture (alpha-to-coverage preservation).
+    const want = kind === 'cutout' ? coverage(img) : 0;
+    let raw = img; // cut-out levels are filtered from the unscaled chain, so rescaling never compounds
+    while (raw.width > 1 || raw.height > 1) {
+        raw = downsample(raw, kind);
+        const next = kind === 'cutout' ? { ...raw, data: raw.data.slice() } : raw;
+        if (kind === 'cutout' && want > 0) {
+            // Pick the alpha threshold whose pass rate is closest to the original, then map it to 0.5.
+            const hist = new Uint32Array(256);
+            for (let i = 3; i < next.data.length; i += 4) hist[next.data[i]]++;
+            const n = next.width * next.height;
+            let above = 0, best = 128, err = Infinity;
+            for (let t = 255; t >= 1; t--) { above += hist[t]; const e = Math.abs(above / n - want); if (e < err) { err = e; best = t; } }
+            const scale = 127.5 / best;
+            for (let i = 3; i < next.data.length; i += 4) next.data[i] = Math.min(255, Math.round(next.data[i] * scale));
+        }
+        levels.push(next);
+    }
     return levels;
 }
 

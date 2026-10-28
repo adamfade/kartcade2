@@ -273,7 +273,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                     const r = await ensureSite(polyline, (m) => setLog((l) => [...l, m]));
                     siteRef.current = { id: r.siteId, site: r.site };
                     if (r.siteId !== siteId) { setSiteId(r.siteId); touch(); }
-                    setSiteNote(`Real ground: 1 m lidar + aerial photo (${r.site.cells.length} areas, fetched ${new Date(r.site.sources.fetched).toLocaleDateString()})${r.stored ? '' : ' — not saved; publish storage.rules'}`);
+                    setSiteNote(`Real ground: 1 m lidar + aerial photo (${r.site.cells.length} areas, fetched ${new Date(r.site.sources.fetched).toLocaleDateString()})${r.site.osm ? ` + ${r.site.osm.buildings.length} buildings and ${r.site.osm.woods.length} woods from OpenStreetMap` : ''}${r.stored ? '' : ' — not saved; publish storage.rules'}`);
                 } catch (e) {
                     siteRef.current = null;
                     setSiteNote(`Real ground unavailable (${(e as Error).message}); using coarse elevation`);

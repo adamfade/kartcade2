@@ -8,6 +8,9 @@ import { decodeSite, demToPng, fetchSiteBytes, planSite, pngToDem } from '../../
 import type { SitePlan, SiteRasters } from '../../../tools/trackbuilder/site.ts';
 import type { LatLon } from '../../../tools/trackbuilder/geo.ts';
 import type { Rgba } from '../../../tools/trackbuilder/dds.ts';
+import { fetchOsm } from '../../../tools/trackbuilder/osm.ts';
+import type { OsmFeatures } from '../../../tools/trackbuilder/osm.ts';
+import { gunzipSync, gzipSync } from 'fflate';
 
 const ROOT = 'trackbuilder/sites';
 
@@ -45,7 +48,10 @@ const decoders = { tiff: decodeTiff, jpeg: decodeJpeg };
 export async function ensureSite(line: LatLon[], log: (m: string) => void): Promise<{ site: SiteRasters; siteId: string; stored: boolean; fresh: boolean }> {
     const siteId = await siteIdFor(line);
     const existing = await loadSite(siteId, log).catch(() => null);
-    if (existing) return { site: existing, siteId, stored: true, fresh: false };
+    if (existing) {
+        await attachOsm(existing, siteId, log, true);
+        return { site: existing, siteId, stored: true, fresh: false };
+    }
 
     const plan = planSite(line);
     log(`Fetching real ground for ${plan.cells.length} areas (1 m lidar + aerial photo) from USGS`);
@@ -87,7 +93,36 @@ export async function ensureSite(line: LatLon[], log: (m: string) => void): Prom
         stored = false;
         log(`Couldn't save the site data (${(e as { code?: string }).code ?? (e as Error).message}); it is used for this session only`);
     }
+    await attachOsm(site, siteId, log, stored);
     return { site, siteId, stored, fresh: true };
+}
+
+/**
+ * OpenStreetMap buildings, woods, trees and barriers for the site's overview square, stored as osm.json.gz next to
+ * the rasters. Sites saved before this existed get it on their next load. A failed fetch leaves the site without
+ * map features (the track still builds) and is retried next time.
+ */
+async function attachOsm(site: SiteRasters, siteId: string, log: (m: string) => void, store: boolean) {
+    if (site.osm || !site.overview) return;
+    const path = `${ROOT}/${siteId}/osm.json.gz`;
+    try {
+        site.osm = JSON.parse(new TextDecoder().decode(gunzipSync(new Uint8Array(await getBytes(ref(storage, path)))))) as OsmFeatures;
+        return;
+    } catch (e) {
+        if ((e as { code?: string }).code !== 'storage/object-not-found') { log(`Couldn't read stored map features (${(e as Error).message}); fetching again`); }
+    }
+    try {
+        log('Fetching buildings, woods and barriers from OpenStreetMap');
+        const osm = await fetchOsm((u, i) => fetch(u, i), site.overview.bbox);
+        site.osm = osm;
+        log(`  ${osm.buildings.length} buildings, ${osm.woods.length} woods, ${osm.trees.length} single trees, ${osm.barriers.length} barriers`);
+        if (store) {
+            await uploadBytes(ref(storage, path), gzipSync(new TextEncoder().encode(JSON.stringify(osm)), { level: 9 }), { contentType: 'application/gzip', cacheControl: 'no-cache' })
+                .catch((e) => log(`Couldn't save the map features (${(e as { code?: string }).code ?? (e as Error).message})`));
+        }
+    } catch (e) {
+        log(`OpenStreetMap unavailable (${(e as Error).message}); building without buildings and woods this time`);
+    }
 }
 
 const memo = new Map<string, Promise<SiteRasters | null>>();

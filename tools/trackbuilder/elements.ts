@@ -32,7 +32,7 @@ export interface ElementBuild { parts: MeshPart[]; textures: Kn5Texture[]; mater
 const MAX_VERTS = 60000;
 
 /** Collects vertices into parts, starting a new numbered part before the 16-bit index limit. */
-class Mesh {
+export class Mesh {
     parts: MeshPart[] = [];
     private cur: MeshPart | null = null;
     private base: string;
@@ -49,11 +49,12 @@ class Mesh {
         return this.cur;
     }
     /** A flat polygon (3 or 4 corners) facing `n`; winding is fixed so cross(b - a, c - a) points along n. */
-    face(pts: V3[], n: V3, uv: [number, number][]) {
+    /** `shade` overrides the stored normal (e.g. foliage lit from above) while `n` still decides the winding. */
+    face(pts: V3[], n: V3, uv: [number, number][], shade?: V3) {
         const p = this.part(pts.length);
         const b = p.positions.length / 3;
         const t = norm(sub(pts[1], pts[0]));
-        pts.forEach((q, k) => { p.positions.push(...q); p.normals.push(...n); p.uvs.push(...uv[k]); p.tangents.push(...t); });
+        pts.forEach((q, k) => { p.positions.push(...q); p.normals.push(...(shade ?? n)); p.uvs.push(...uv[k]); p.tangents.push(...t); });
         const tri = (a: number, c: number, d: number) => {
             const cr = cross(sub(pts[c], pts[a]), sub(pts[d], pts[a]));
             if (Math.hypot(...cr) < 1e-12) return;
@@ -62,9 +63,9 @@ class Mesh {
         tri(0, 1, 2);
         if (pts.length === 4) tri(0, 2, 3);
     }
-    double(pts: V3[], n: V3, uv: [number, number][], backUv?: [number, number][]) {
-        this.face(pts, n, uv);
-        this.face(pts, [-n[0], -n[1], -n[2]], backUv ?? uv);
+    double(pts: V3[], n: V3, uv: [number, number][], backUv?: [number, number][], shade?: V3) {
+        this.face(pts, n, uv, shade);
+        this.face(pts, [-n[0], -n[1], -n[2]], backUv ?? uv, shade);
     }
 }
 
@@ -139,7 +140,7 @@ function guardrail(e: Extract<TrackElement, { type: 'guardrail' }>, f: ReturnTyp
 }
 
 /** Upright box standing on `p`, aligned with `fw`. */
-function box(m: Mesh, p: V3, fw: V3, w: number, d: number, h: number) {
+export function box(m: Mesh, p: V3, fw: V3, w: number, d: number, h: number) {
     const fx = norm(fw), rx: V3 = [fx[2], 0, -fx[0]];
     const c = (sx: number, sz: number, y: number): V3 => [p[0] + rx[0] * sx * w / 2 + fx[0] * sz * d / 2, p[1] + y, p[2] + rx[2] * sx * w / 2 + fx[2] * sz * d / 2];
     const uv: [number, number][] = [[0, 0], [1, 0], [1, h], [0, h]];
@@ -151,7 +152,7 @@ function box(m: Mesh, p: V3, fw: V3, w: number, d: number, h: number) {
 }
 
 /** A Douglas-fir-like tree: hexagonal trunk (with collision) and two stacked cones of needles. */
-function tree(trunk: Mesh, crown: Mesh, p: V3, H: number, rand: () => number) {
+export function tree(trunk: Mesh, crown: Mesh, p: V3, H: number, rand: () => number) {
     const r = Math.max(0.18, H * 0.018), th = H * 0.35, seg = 6;
     const rot = rand() * Math.PI * 2;
     for (let k = 0; k < seg; k++) {

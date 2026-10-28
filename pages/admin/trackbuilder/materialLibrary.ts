@@ -97,4 +97,4 @@ export function loadLibrary(roles?: SurfaceRole[]): Promise<MaterialLibrary> {
     return p;
 }
 
-export const LIBRARY_ROLES_FOR_BUILD: SurfaceRole[] = ['asphalt', 'asphalt_track', 'gravel', 'grass', 'concrete'];
+export const LIBRARY_ROLES_FOR_BUILD: SurfaceRole[] = ['asphalt', 'asphalt_track', 'gravel', 'grass', 'concrete', 'siding', 'roof', 'metal_roof', 'brick', 'wood'];

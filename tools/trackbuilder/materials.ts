@@ -11,10 +11,11 @@
 // Later stages only swap the macro (generated now; aerial imagery for terrain) or the library entry.
 
 import { encodeDds, resize } from './dds.ts';
-import type { Rgba } from './dds.ts';
+import type { MipKind, Rgba } from './dds.ts';
 import type { Kn5Material, Kn5Texture } from './kn5.ts';
 
-export type SurfaceRole = 'asphalt' | 'asphalt_track' | 'gravel' | 'grass' | 'dirt' | 'forest_floor' | 'rock' | 'concrete' | 'bark';
+export type SurfaceRole = 'asphalt' | 'asphalt_track' | 'gravel' | 'grass' | 'dirt' | 'forest_floor' | 'rock' | 'concrete' | 'bark'
+    | 'siding' | 'roof' | 'metal_roof' | 'brick' | 'wood';
 
 /** One library material, already processed to DDS. */
 export interface LibraryEntry {
@@ -48,6 +49,12 @@ export const LIBRARY_CATALOG: Record<SurfaceRole, { asset: string; label: string
     rock: { asset: 'rock_face_03', label: 'Rock face (cuttings)', size: 1024 },
     concrete: { asset: 'concrete', label: 'Concrete', size: 1024 },
     bark: { asset: 'pine_bark', label: 'Pine bark', size: 1024 },
+    // Buildings and fences: used as detail layers under a per-building colour, so one scan covers many looks.
+    siding: { asset: 'blue_painted_planks', label: 'Painted siding', size: 1024 },
+    roof: { asset: 'roof_slates_02', label: 'Slate / shingle roof', size: 1024 },
+    metal_roof: { asset: 'corrugated_iron_02', label: 'Corrugated metal', size: 1024 },
+    brick: { asset: 'brick_wall_02', label: 'Brick', size: 1024 },
+    wood: { asset: 'old_planks_02', label: 'Weathered wood', size: 1024 },
 };
 
 export const LIBRARY_VERSION = 'v1';
@@ -155,6 +162,11 @@ const PROCEDURAL: Record<SurfaceRole, { mean: [number, number, number]; tileM: n
     rock: { mean: [110, 106, 100], tileM: 3, octaves: [4, 16, 64, 256], contrast: 0.5, bump: 12, rough: 0.85 },
     concrete: { mean: [150, 148, 142], tileM: 4, octaves: [16, 64, 256], contrast: 0.2, bump: 2, rough: 0.8 },
     bark: { mean: [84, 62, 44], tileM: 1.5, octaves: [4, 16, 64], contrast: 0.5, bump: 8, rough: 0.95 },
+    siding: { mean: [170, 170, 165], tileM: 1, octaves: [2, 64], contrast: 0.15, bump: 3, rough: 0.8 },
+    roof: { mean: [70, 70, 72], tileM: 3, octaves: [16, 64, 256], contrast: 0.3, bump: 4, rough: 0.9 },
+    metal_roof: { mean: [150, 152, 155], tileM: 2.7, octaves: [4, 32], contrast: 0.2, bump: 6, rough: 0.5 },
+    brick: { mean: [140, 80, 60], tileM: 2, octaves: [16, 64], contrast: 0.3, bump: 5, rough: 0.9 },
+    wood: { mean: [120, 100, 80], tileM: 2, octaves: [4, 32, 128], contrast: 0.35, bump: 5, rough: 0.9 },
 };
 
 const procCache = new Map<SurfaceRole, LibraryEntry>();
@@ -204,7 +216,7 @@ export class MaterialBook {
     lazy: boolean;
     constructor(lazy = false) { this.lazy = lazy; }
     /** A generated image texture: encoded to DDS now, or kept as RGBA in a lazy book. */
-    image(name: string, make: () => Rgba, opts: { format?: 'bc1' | 'bc3'; mips?: 'color' | 'normal' | 'linear' } = {}): string {
+    image(name: string, make: () => Rgba, opts: { format?: 'bc1' | 'bc3'; mips?: MipKind } = {}): string {
         if (this.names.has(name)) return name;
         if (this.lazy && !generated.has(name)) {
             this.names.add(name);

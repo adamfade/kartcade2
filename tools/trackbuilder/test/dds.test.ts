@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeDds, encodeDds, mipChain, resize } from '../dds.ts';
 import type { Rgba } from '../dds.ts';
+import { treeAtlas } from '../features.ts';
 
 function photoLike(w: number, h: number): Rgba {
     const data = new Uint8Array(w * h * 4);
@@ -82,4 +83,19 @@ test('photo material processing: sizes, normalised detail, maps; builds use the 
     const road = res.materials.find((x) => x.name === 'road')!;
     assert.ok(road.textures.some((t) => t.texture === 'asphalt_02_detail.dds'), 'road uses the library detail');
     assert.equal(road.properties.find((p) => p.name === 'detailUVMultiplier')!.a, 48 / 3);
+});
+
+test('cutout mips keep foliage coverage and never darken the edges', () => {
+    // The real tree atlas: box-filtered alpha would thin the crowns below the 0.5 cut-off in the distance.
+    const img = treeAtlas();
+    const cov = (m: Rgba) => { let n = 0; for (let i = 3; i < m.data.length; i += 4) if (m.data[i] >= 128) n++; return n / (m.width * m.height); };
+    const base = cov(img);
+    const cut = mipChain(img, 'cutout'), plain = mipChain(img, 'color');
+    for (let l = 1; l <= 5; l++) assert.ok(Math.abs(cov(cut[l]) - base) < base * 0.12, `level ${l}: ${cov(cut[l]).toFixed(3)} vs ${base.toFixed(3)}`);
+    assert.ok(cov(plain[5]) < cov(cut[5]), `plain ${cov(plain[5]).toFixed(3)} vs cutout ${cov(cut[5]).toFixed(3)}`);
+    // Visible texels keep foliage colour (green dominant, not darkened toward black).
+    const m = cut[3];
+    let dark = 0, vis = 0;
+    for (let i = 0; i < m.data.length; i += 4) if (m.data[i + 3] >= 128) { vis++; if (m.data[i + 1] < 40) dark++; }
+    assert.ok(dark / vis < 0.02, `${dark} of ${vis} visible texels near black`);
 });

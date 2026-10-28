@@ -12,6 +12,8 @@ import { decodePNG, encodePNG } from './png.ts';
 import type { Rgba } from './dds.ts';
 
 export interface GeoBox { west: number; south: number; east: number; north: number }
+import type { OsmFeatures } from './osm.ts';
+
 export interface DemRaster { bbox: GeoBox; width: number; height: number; heights: Float32Array }
 export interface ImageRaster { bbox: GeoBox; width: number; height: number; rgba: Uint8Array }
 
@@ -22,6 +24,8 @@ export interface SiteRasters {
     cells: SiteCell[];
     overview: { bbox: GeoBox; sizeM: number; dem?: DemRaster; rgb?: ImageRaster } | null;
     sources: { elevation: string; imagery: string; fetched: string };
+    /** OpenStreetMap buildings, woods, trees and barriers over the overview square (ODbL). */
+    osm?: OsmFeatures;
 }
 
 export interface SitePlan {

@@ -323,3 +323,73 @@ test('DEM storage: Terrarium PNG round trip keeps 1/256 m', () => {
     const back = pngToDem(demToPng({ bbox, width: 4, height: 4, heights }), bbox);
     for (let i = 0; i < 16; i++) assert.ok(Math.abs(back.heights[i] - heights[i]) < 1 / 256 + 1e-6);
 });
+
+import { readFileSync } from 'node:fs';
+import { parseOverpass } from '../osm.ts';
+import { treeAtlas } from '../features.ts';
+
+test('OpenStreetMap surroundings: buildings, woods and barriers stay off the road and go into the KN5', () => {
+    // A straight road through the real sample (Pete's Mountain area, West Linn), on flat ground.
+    const line = [{ lat: 45.3398, lon: -122.6676 }, { lat: 45.3398, lon: -122.6545 }];
+    const flat = () => 30;
+    const site = syntheticSite(line, flat);
+    const sample = JSON.parse(readFileSync(new URL('./osm_petes_sample.json', import.meta.url), 'utf8'));
+    const osm = parseOverpass(sample, site.overview!.bbox, '2026-10-28');
+    assert.ok(osm.buildings.length >= 80, `buildings ${osm.buildings.length}`);
+    assert.equal(osm.woods.length, 3);
+    // Synthetic extras: a fence and a guard rail across the road, a tree in the middle of it, a wood beside it.
+    const mid = { lat: 45.3398, lon: -122.661 };
+    osm.barriers.push({ id: 1, line: [{ lat: 45.3390, lon: -122.661 }, { lat: 45.3406, lon: -122.661 }], tags: { barrier: 'fence' } });
+    osm.barriers.push({ id: 2, line: [{ lat: 45.3399, lon: -122.664 }, { lat: 45.3399, lon: -122.663 }], tags: { barrier: 'guard_rail' } });
+    osm.trees.push({ id: 3, at: mid, tags: { natural: 'tree' } });
+    const sq = (s: number, n: number, w: number, e: number) => [{ lat: s, lon: w }, { lat: s, lon: e }, { lat: n, lon: e }, { lat: n, lon: w }, { lat: s, lon: w }];
+    osm.woods.push({ id: 4, rings: [sq(45.3392, 45.3404, -122.6600, -122.6585)], tags: { natural: 'wood' } });
+    site.osm = osm;
+
+    const width = 6.5;
+    const res = buildTrack({ name: 'OSM Rd', polyline: line, heightSampler: flat, width, site });
+    assert.ok(res.featureStats.buildings >= 10, `buildings ${res.featureStats.buildings}`);
+    assert.ok(res.featureStats.trees > 100, `trees ${res.featureStats.trees}`);
+    assert.ok(res.featureStats.barriers >= 2);
+
+    const P = res.centerline.points;
+    const dist = (x: number, z: number) => Math.min(...P.map((p) => Math.hypot(p.x - x, p.y - z)));
+    const clear = (prefix: RegExp, min: number) => {
+        for (const p of res.features.filter((f) => prefix.test(f.name))) {
+            for (let i = 0; i < p.positions.length; i += 3) {
+                const d = dist(p.positions[i], p.positions[i + 2]);
+                assert.ok(d >= min, `${p.name} vertex ${d.toFixed(2)} m from the centre line`);
+            }
+        }
+    };
+    clear(/^(1WALL_)?(BLD|ROOF)/, width / 2 + 1);
+    clear(/^TREES/, width / 2 + 0.99);
+    clear(/^(1WALL_)?BAR/, width / 2 + 1);
+    // The fence and rail exist on both sides of the gap.
+    assert.ok(res.features.some((p) => /BAR/.test(p.name)));
+    // Collision only near the road, with names Assetto Corsa maps to the WALL surface.
+    for (const p of res.features) if (p.name.startsWith('1')) assert.match(p.name, /^1WALL_/);
+    assert.ok(res.features.some((p) => p.name.startsWith('1WALL_TRUNKS') && p.visible === false));
+    assert.ok(res.features.some((p) => p.name.startsWith('TREES')));
+
+    const k = readKn5(res.files['osm_rd/osm_rd.kn5']);
+    assert.equal(k.consumed, k.total);
+    const tree = k.materials.find((m) => m.name === 'tree_billboard')!;
+    assert.equal(tree.shader, 'ksPerPixelAT');
+    assert.ok(k.textures.some((t) => t.name === 'tree_atlas.dds'));
+    const nodes: ReadNode[] = []; walk(k.root, (n) => nodes.push(n));
+    for (const n of nodes) if (n.indexCount != null) { assert.ok(n.maxIndex! < n.vertexCount!); assert.equal(n.badNumbers ?? 0, 0); }
+    assert.match(new TextDecoder().decode(res.files['osm_rd/ui/ui_track.json']), /building, woodland and barrier data © OpenStreetMap/);
+});
+
+test('tree atlas: four species cells, transparent around the foliage, opaque trunks', () => {
+    const a = treeAtlas();
+    assert.equal(a.width, 1024); assert.equal(a.height, 512);
+    const alpha = (x: number, y: number) => a.data[(y * a.width + x) * 4 + 3];
+    for (let c = 0; c < 4; c++) {
+        assert.equal(alpha(c * 256 + 2, 4), 0, 'corner is transparent');
+        assert.equal(alpha(c * 256 + 128, 500), 255, 'trunk base is opaque');
+        // No cell bleeds into its neighbour (mip and filtering safety).
+        for (let y = 0; y < 512; y += 4) { assert.equal(alpha(c * 256, y), 0); assert.equal(alpha(c * 256 + 255, y), 0); }
+    }
+});
