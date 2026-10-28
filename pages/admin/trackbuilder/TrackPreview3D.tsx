@@ -46,7 +46,15 @@ const DRIVE_SPEED = 22; // m/s, about 80 km/h
  */
 function textureFrom(t: Kn5Texture, renderer: THREE.WebGLRenderer): THREE.Texture {
     let tex: THREE.Texture;
-    if (t.name.toLowerCase().endsWith('.dds')) {
+    if (t.rgba) {
+        // Geometry-only builds keep generated textures uncompressed.
+        tex = new THREE.DataTexture(t.rgba.data, t.rgba.width, t.rgba.height, THREE.RGBAFormat);
+        tex.flipY = false;
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+    } else if (t.name.toLowerCase().endsWith('.dds')) {
         const d = decodeDds(t.data);
         tex = new THREE.DataTexture(d.rgba, d.width, d.height, THREE.RGBAFormat);
         tex.flipY = false;

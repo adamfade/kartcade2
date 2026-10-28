@@ -13,6 +13,8 @@ export interface TerrainOptions {
     margin?: number;
     /** Most vertices to spend (spacing grows to fit). */
     maxVerts?: number;
+    /** Exact extent in local metres (e.g. the site overview square). Default: the track's box + margin. */
+    extent?: { x0: number; x1: number; z0: number; z1: number };
 }
 
 const MAX_PART_VERTS = 60000;
@@ -23,6 +25,7 @@ export function buildTerrain(cl: Centerline, g: TrackGeometry, opts: TerrainOpti
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const p of P) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.y); z1 = Math.max(z1, p.y); }
     x0 -= margin; x1 += margin; z0 -= margin; z1 += margin;
+    if (opts.extent) ({ x0, x1, z0, z1 } = opts.extent);
     const area = (x1 - x0) * (z1 - z0);
     const spacing = Math.max(15, Math.sqrt(area / (opts.maxVerts ?? 120000)));
     const cols = Math.ceil((x1 - x0) / spacing) + 1, rows = Math.ceil((z1 - z0) / spacing) + 1;
@@ -33,24 +36,30 @@ export function buildTerrain(cl: Centerline, g: TrackGeometry, opts: TerrainOpti
     const zone = reachMax + spacing * 1.5;
     const cell = zone;
     const buckets = new Map<string, number[]>();
-    for (let i = 0; i < n; i += 2) { const k = `${Math.floor(P[i].x / cell)},${Math.floor(P[i].y / cell)}`; let b = buckets.get(k); if (!b) buckets.set(k, (b = [])); b.push(i); }
+    for (let i = 0; i < n; i += 1) { const k = `${Math.floor(P[i].x / cell)},${Math.floor(P[i].y / cell)}`; let b = buckets.get(k); if (!b) buckets.set(k, (b = [])); b.push(i); }
+    /**
+     * Highest the terrain may be at (x, z): just under the built surface (road, shoulder, verge) at the same
+     * spot, measured at the nearest centreline sample. Null when the point is beyond the built corridor.
+     */
     const nearestFloor = (x: number, z: number): number | null => {
         const cx = Math.floor(x / cell), cz = Math.floor(z / cell);
-        let floor: number | null = null;
+        let best = -1, bd = Infinity;
         for (let a = cx - 1; a <= cx + 1; a++) for (let b = cz - 1; b <= cz + 1; b++) for (const i of buckets.get(`${a},${b}`) ?? []) {
-            const dx = x - P[i].x, dz = z - P[i].y, d = Math.hypot(dx, dz);
-            if (d > zone) continue;
-            // Lowest built surface around this sample (road edge and verge edge both sides), minus a margin.
-            const lo = Math.min(g.surfaceAt(i, -half), g.surfaceAt(i, half), g.surfaceAt(i, -(half + g.vergeReach(i, -1))), g.surfaceAt(i, half + g.vergeReach(i, 1))) - 2.5;
-            floor = floor == null ? lo : Math.min(floor, lo);
+            const d = (x - P[i].x) ** 2 + (z - P[i].y) ** 2;
+            if (d < bd) { bd = d; best = i; }
         }
-        return floor;
+        if (best < 0 || Math.sqrt(bd) > zone) return null;
+        const t = cl.tangents[best];
+        const lat = (x - P[best].x) * t.y + (z - P[best].y) * -t.x;
+        const reachL = half + g.vergeReach(best, -1), reachR = half + g.vergeReach(best, 1);
+        if (lat < -reachL - spacing * 1.5 || lat > reachR + spacing * 1.5) return null;
+        return g.surfaceAt(best, Math.max(-reachL, Math.min(reachR, lat))) - 0.3;
     };
 
     let fallback = 0; { let c = 0; for (let i = 0; i < n; i += 10) { fallback += g.surfaceAt(i, 0); c++; } fallback /= c || 1; }
     const H: number[] = new Array(rows * cols);
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-        const x = x0 + c * spacing, z = z0 + r * spacing;
+        const x = Math.min(x1, x0 + c * spacing), z = Math.min(z1, z0 + r * spacing); // last row/column on the edge, never past the data
         let h = opts.ground(x, z);
         if (h == null || !Number.isFinite(h)) h = fallback;
         const f = nearestFloor(x, z);
@@ -65,7 +74,7 @@ export function buildTerrain(cl: Centerline, g: TrackGeometry, opts: TerrainOpti
         const r1 = Math.min(rows, r0 + perBand);
         const p: MeshPart = { name: `TERRAIN_${k}`, material: 'terrain', positions: [], normals: [], uvs: [], tangents: [], indices: [], castShadows: false };
         for (let r = r0; r < r1; r++) for (let c = 0; c < cols; c++) {
-            const x = x0 + c * spacing, z = z0 + r * spacing, y = H[r * cols + c];
+            const x = Math.min(x1, x0 + c * spacing), z = Math.min(z1, z0 + r * spacing), y = H[r * cols + c];
             const hx = (H[r * cols + Math.min(cols - 1, c + 1)] - H[r * cols + Math.max(0, c - 1)]) / (2 * spacing);
             const hz = (H[Math.min(rows - 1, r + 1) * cols + c] - H[Math.max(0, r - 1) * cols + c]) / (2 * spacing);
             const nl = Math.hypot(hx, 1, hz);

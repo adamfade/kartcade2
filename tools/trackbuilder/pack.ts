@@ -14,6 +14,9 @@ import type { MarkingPlan } from './mesh.ts';
 import type { Kn5Material, Kn5Texture } from './kn5.ts';
 import { buildElements } from './elements.ts';
 import { buildTerrain } from './terrain.ts';
+import { siteHeightSampler } from './site.ts';
+import type { SiteRasters } from './site.ts';
+import { aerialMacro, siteRegions, splitByRegion } from './ground.ts';
 import type { ElementBuild, TrackElement } from './elements.ts';
 import { writeFastLane } from './aiLine.ts';
 
@@ -49,6 +52,8 @@ export interface BuildInput {
     library?: MaterialLibrary;
     /** Road markings (centre line style, edge lines, passing-zone overrides). */
     markings?: MarkingPlan;
+    /** Stored site data (1 m lidar + aerial imagery). Without it, `heightSampler` (Terrarium tiles) is used. */
+    site?: SiteRasters;
     /** 'geometry' skips the KN5, AI line, maps and zip (for the editor's preview); default 'full'. */
     output?: 'full' | 'geometry';
     log?: (msg: string) => void;
@@ -83,8 +88,8 @@ const ini = (sections: Record<string, Record<string, string | number>>) =>
  * The ground materials every track uses. All are ksPerPixelMultiMap_NMDetail over the library (see
  * materials.ts); macro colours start from the photographed material's own mean colour.
  */
-function buildSurfaceMaterials(id: string, lib: MaterialLibrary | undefined, circuit: boolean, width: number): MaterialBook {
-    const book = new MaterialBook();
+function buildSurfaceMaterials(id: string, lib: MaterialLibrary | undefined, circuit: boolean, width: number, lazy = false): MaterialBook {
+    const book = new MaterialBook(lazy);
     const roadRole = circuit ? 'asphalt_track' : 'asphalt';
     const road = entryFor(lib, roadRole);
     let rm: ReturnType<typeof roadMacro> | null = null;
@@ -149,23 +154,50 @@ export function buildTrack(input: BuildInput): BuildResult {
     const cl = buildCenterline(polyline, { spacing: circuit ? 1 : 2, closed: circuit });
     const ll = cl.points.map((p) => cl.projection.toLatLon(p));
     log(`Sampling elevation along ${(cl.length / 1000).toFixed(2)} km`);
-    const profile = roadProfile(ll, cl.s, input.heightSampler, circuit ? { closed: true, loopLength: cl.length, sigmaM: 12 } : {});
-    const ground = (x: number, y: number) => input.heightSampler(cl.projection.toLatLon({ x, y }));
+    const site = input.site;
+    const lidar = !!site?.cells.some((c) => c.dem);
+    const sampler = site ? siteHeightSampler(site, input.heightSampler) : input.heightSampler;
+    if (lidar) log('Using 1 m lidar elevation and aerial imagery');
+    // 1 m lidar needs little smoothing; coarse elevation needs more to hide its 10 m cells.
+    const sigmaM = lidar ? 6 : circuit ? 12 : 18;
+    const profile = roadProfile(ll, cl.s, sampler, circuit ? { closed: true, loopLength: cl.length, sigmaM } : { sigmaM });
+    const ground = (x: number, y: number) => sampler(cl.projection.toLatLon({ x, y }));
     log('Building road, verges and walls');
     const geometry = buildGeometry(cl, profile.heights, {
         width: input.width, walls: input.walls ?? true, ground, flipStart: circuit ? false : input.flipStart,
-        gridSlots: input.gridSlots, markings: markingPlan(input, circuit), ...(circuit ? { verge: 25, maxBankDeg: 2 } : {}),
+        gridSlots: input.gridSlots, markings: markingPlan(input, circuit), lidar,
+        ...(circuit ? { verge: 25, maxBankDeg: 2 } : lidar ? { verge: 45 } : {}),
     });
     const pitboxes = geometry.dummies.filter((d) => d.name.startsWith('AC_PIT_')).length;
     const clockwise = circuit && signedArea(cl.points) < 0;
 
-    const terrain = input.terrain === false ? [] : buildTerrain(cl, geometry, { ground: (x, y) => input.heightSampler(cl.projection.toLatLon({ x, y })) });
+    // With site data the terrain covers the overview square; otherwise the track's box plus a margin.
+    let terrainExtent: { x0: number; x1: number; z0: number; z1: number } | undefined;
+    if (site?.overview) {
+        const a = cl.projection.toLocal({ lat: site.overview.bbox.south, lon: site.overview.bbox.west });
+        const b = cl.projection.toLocal({ lat: site.overview.bbox.north, lon: site.overview.bbox.east });
+        terrainExtent = { x0: a.x, x1: b.x, z0: a.y, z1: b.y };
+    }
+    let terrain = input.terrain === false ? [] : buildTerrain(cl, geometry, { ground, extent: terrainExtent });
     if (terrain.length) log('Adding the surrounding terrain');
     const elements = buildElements(cl, geometry, input.elements ?? []);
     if (input.elements?.length) log(`Placed ${input.elements.length} scenery item${input.elements.length === 1 ? '' : 's'}`);
     elements.warnings.forEach((w) => log(w));
     const triangles = [...geometry.parts, ...elements.parts].reduce((a, p) => a + p.indices.length / 3, 0);
-    const book = buildSurfaceMaterials(id, input.library, circuit, input.width);
+    const book = buildSurfaceMaterials(id, input.library, circuit, input.width, input.output === 'geometry');
+    // Aerial ground: verge and terrain take the NAIP photo of each 512 m cell (or the overview) as their macro.
+    const regions = site ? siteRegions(site) : [];
+    if (regions.length) {
+        log(`Draping aerial imagery over ${regions.length} area${regions.length === 1 ? '' : 's'}`);
+        const tag = (site!.sources.fetched || 'site').replace(/[^0-9a-z]/gi, '').slice(0, 14);
+        const materialOf = (r: (typeof regions)[number]) => macroDetailMaterial(book, input.library, {
+            name: `aerial_${r.key}`, role: 'grass', specular: 0.04, reflection: 0.02,
+            macro: { key: `aerial_${tag}_${id.length}_${Math.round(input.width * 10)}_${r.key}`, image: () => aerialMacro(r, site!, cl, geometry, input.width / 2 + 1), sizeM: r.sizeM },
+        });
+        const verge = geometry.parts.filter((p) => p.name.startsWith('1GRASS_'));
+        geometry.parts = [...geometry.parts.filter((p) => !p.name.startsWith('1GRASS_')), ...splitByRegion(verge, regions, cl.projection, materialOf)];
+        terrain = splitByRegion(terrain, regions, cl.projection, materialOf);
+    }
     const textures = book.textures, materials = book.materials;
     const lengthM = Math.round(cl.length);
     const stats = { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles };
@@ -214,7 +246,7 @@ export function buildTrack(input: BuildInput): BuildResult {
 
     const uiTrack = {
         name: input.name,
-        description: `${input.name}, built from the real ${circuit ? 'circuit' : 'road'}. ${circuit ? `Circuit, ${(cl.length / 1000).toFixed(2)} km lap, ${pitboxes} pit boxes` : `Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb`}. Road data © OpenStreetMap contributors (ODbL); elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM). Made for Kartcade.`,
+        description: `${input.name}, built from the real ${circuit ? 'circuit' : 'road'}. ${circuit ? `Circuit, ${(cl.length / 1000).toFixed(2)} km lap, ${pitboxes} pit boxes` : `Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb`}. Road data © OpenStreetMap contributors (ODbL); ${lidar ? 'elevation USGS 3DEP 1 m lidar, imagery USDA NAIP (public domain)' : 'elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM)'}; materials Poly Haven (CC0). Made for Kartcade.`,
         tags: circuit ? ['circuit', 'real track', 'Oregon', 'Kartcade'] : ['point to point', 'real road', 'Oregon', 'Kartcade'],
         geotags: [input.polyline[0].lat.toFixed(5), input.polyline[0].lon.toFixed(5)],
         country: input.country ?? 'USA',

@@ -37,3 +37,51 @@ export function kartCircuit(): LatLon[] {
 
 /** Nearly flat ground with a gentle 1.5 m tilt, like a fairground lot. */
 export const flatLot: HeightSampler = (p) => 50 + (p.lat - 45.2262) * 111_120 * 0.01;
+
+import { planSite } from '../site.ts';
+import type { SiteRasters, GeoBox } from '../site.ts';
+import { makeProjection } from '../geo.ts';
+
+/**
+ * Synthetic site data for a line: DEM from `terrain`, aerial photo of green fields with the road drawn as a
+ * dark grey stripe (so tests can check the road gets painted out of the ground texture).
+ */
+export function syntheticSite(line: LatLon[], terrain: HeightSampler, opts: { cellPx?: number; overviewPx?: number } = {}): SiteRasters {
+    const plan = planSite(line, { corridorM: 90, marginM: 300 });
+    const proj = makeProjection(line[0]);
+    const roadPts = line.map((p) => proj.toLocal(p));
+    const nearRoad = (lat: number, lon: number) => {
+        const q = proj.toLocal({ lat, lon });
+        let best = Infinity;
+        for (let i = 0; i < roadPts.length - 1; i++) {
+            const a = roadPts[i], b = roadPts[i + 1], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1;
+            const t = Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / l2));
+            best = Math.min(best, Math.hypot(q.x - (a.x + dx * t), q.y - (a.y + dy * t)));
+        }
+        return best;
+    };
+    const dem = (bbox: GeoBox, n: number) => {
+        const heights = new Float32Array(n * n);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+            const lat = bbox.north - ((y + 0.5) / n) * (bbox.north - bbox.south), lon = bbox.west + ((x + 0.5) / n) * (bbox.east - bbox.west);
+            heights[y * n + x] = terrain({ lat, lon }) ?? 0;
+        }
+        return { bbox, width: n, height: n, heights };
+    };
+    const img = (bbox: GeoBox, n: number) => {
+        const rgba = new Uint8Array(n * n * 4);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+            const lat = bbox.north - ((y + 0.5) / n) * (bbox.north - bbox.south), lon = bbox.west + ((x + 0.5) / n) * (bbox.east - bbox.west);
+            const road = nearRoad(lat, lon) < 3.5;
+            rgba.set(road ? [60, 60, 62, 255] : [90 + (x % 9), 120, 60, 255], (y * n + x) * 4);
+        }
+        return { bbox, width: n, height: n, rgba };
+    };
+    const cp = opts.cellPx ?? 64, op = opts.overviewPx ?? 128;
+    return {
+        version: 1,
+        cells: plan.cells.map((c) => ({ ...c, dem: dem(c.bbox, cp), rgb: img(c.bbox, cp) })),
+        overview: { ...plan.overview, dem: dem(plan.overview.bbox, op), rgb: img(plan.overview.bbox, op) },
+        sources: { elevation: 'synthetic', imagery: 'synthetic', fetched: '2026-10-28' },
+    };
+}

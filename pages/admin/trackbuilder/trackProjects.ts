@@ -27,6 +27,10 @@ export interface TrackProject {
     gridSlots: number;
     elements: TrackElement[];
     source?: string;
+    /** Stored site data (lidar + imagery) for `line`: Storage trackbuilder/sites/<siteId>/. */
+    siteId?: string | null;
+    /** Build with the real ground (lidar + aerial photo). Default true. */
+    realGround?: boolean;
     stats?: { lengthM: number; climbM: number } | null;
     createdBy?: string;
     updatedBy?: string;

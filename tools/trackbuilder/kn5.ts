@@ -4,7 +4,12 @@
 
 import type { Dummy, MeshPart } from './mesh.ts';
 
-export interface Kn5Texture { name: string; data: Uint8Array }
+export interface Kn5Texture {
+    name: string;
+    data: Uint8Array;
+    /** Uncompressed image kept for previews when `data` hasn't been encoded (geometry-only builds). */
+    rgba?: { width: number; height: number; data: Uint8Array };
+}
 export interface Kn5Material {
     name: string;
     shader: string; // e.g. ksPerPixel

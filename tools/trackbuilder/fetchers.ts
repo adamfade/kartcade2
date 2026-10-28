@@ -70,6 +70,12 @@ export async function roadWays(net: NetOptions, line: LatLon[]): Promise<{ tags:
 
 /** Fetch and decode the Terrarium tiles covering the road (+ verge), returning a height sampler. */
 export async function elevationSampler(net: NetOptions, line: LatLon[], decode: DecodeTile, z = 14) {
+    const { tiles } = await elevationTiles(net, line, decode, z);
+    return terrariumSampler(z, tiles);
+}
+
+/** The decoded Terrarium tiles themselves (plain data: can be sent to a worker). */
+export async function elevationTiles(net: NetOptions, line: LatLon[], decode: DecodeTile, z = 14): Promise<{ z: number; tiles: Map<string, TilePixels> }> {
     const tiles = tilesForBBox(bboxOf(line, 400), z); // 400 m margin: the visual terrain around the track
     if (tiles.length > 64) throw new Error(`Road is too long for one build (${tiles.length} elevation tiles); split it`);
     const map = new Map<string, TilePixels>();
@@ -79,7 +85,7 @@ export async function elevationSampler(net: NetOptions, line: LatLon[], decode: 
         map.set(`${t.x}/${t.y}`, await decode(new Uint8Array(await res.arrayBuffer())));
     }
     net.log?.(`Loaded ${tiles.length} elevation tiles (zoom ${z})`);
-    return terrariumSampler(z, map);
+    return { z, tiles: map };
 }
 
 export interface BuildFromPinsInput {

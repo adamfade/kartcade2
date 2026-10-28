@@ -36,6 +36,11 @@ export interface MeshOptions {
     gridSlots?: number;
     /** Road markings; default double yellow centre and white edge lines on roads, white edges on circuits. */
     markings?: MarkingPlan;
+    /**
+     * Fine elevation (1 m lidar) is available: the verge follows the real ground closely (ditches, cuttings,
+     * banks) with dense columns, and the boundary walls become invisible (the terrain is the visual edge).
+     */
+    lidar?: boolean;
 }
 
 export interface TrackGeometry {
@@ -219,7 +224,8 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     const sideRow = (i: number, side: -1 | 1) => {
         const edge = surf(i, side * half);
         const lim = reach(i, side);
-        const offs = [0, shoulder, shoulder + 3, shoulder + 10, shoulder + 22, shoulder + verge].map((d) => Math.min(d, lim + shoulder));
+        const steps = opts.lidar ? [0, 0, 0.8, 1.8, 3, 5, 8, 12, 18, 26, 36] : [0, 0, 3, 10, 22];
+        const offs = [...steps.map((d, k) => (k === 0 ? 0 : shoulder + d)), shoulder + verge].map((d) => Math.min(d, lim + shoulder));
         // Keep offsets strictly increasing even when clamped.
         for (let k = 1; k < offs.length; k++) offs[k] = Math.max(offs[k], offs[k - 1] + 0.05);
         prof[side === -1 ? 0 : 1][i] = { offs: offs.slice(), ys: [] };
@@ -229,7 +235,11 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
             let y = edge - (k === 0 ? 0 : 0.03); // shoulder a touch below the asphalt
             if (k >= 2 && opts.ground) {
                 const g = opts.ground(p[0], p[2]);
-                if (g != null && Number.isFinite(g)) y = edge + (g - edge) * smoothstep((d - shoulder) / (verge * 0.6));
+                // Lidar: the real ground (it already contains the road bench, ditches and cuttings), eased in
+                // over 1.5 m from the shoulder. Coarse elevation: a long blend hides its 10 m cells.
+                if (g != null && Number.isFinite(g)) y = opts.lidar
+                    ? (edge - 0.05) + (g - (edge - 0.05)) * smoothstep((d - shoulder) / 1.5)
+                    : edge + (g - edge) * smoothstep((d - shoulder) / (verge * 0.6));
             }
             p[1] = y;
             prof[side === -1 ? 0 : 1][i].ys.push(y);
@@ -257,15 +267,18 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
 
     if (opts.walls ?? true) {
         const h = opts.wallHeight ?? 2.5;
-        parts.push(wallPart('1WALL_L', 'wall', L.map((r) => r[0]), h));
-        parts.push(wallPart('1WALL_R', 'wall', R.map((r) => r[r.length - 1]), h));
+        const wl = wallPart('1WALL_L', 'wall', L.map((r) => r[0]), h), wr = wallPart('1WALL_R', 'wall', R.map((r) => r[r.length - 1]), h);
+        if (opts.lidar) { wl.visible = wr.visible = false; wl.castShadows = wr.castShadows = false; }
+        parts.push(wl, wr);
         if (!closed) {
             // Cap the two ends so cars can't drive off the start or the finish.
             const capAt = (i: number, flip: boolean) => {
                 const row = [...L[i], ...R[i]];
                 return wallPart(`1WALL_END${flip ? 'B' : 'A'}`, 'wall', row, h);
             };
-            parts.push(capAt(0, false), capAt(n - 1, true));
+            const ca = capAt(0, false), cb = capAt(n - 1, true);
+            if (opts.lidar) { ca.visible = cb.visible = false; ca.castShadows = cb.castShadows = false; }
+            parts.push(ca, cb);
         }
     }
 

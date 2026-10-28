@@ -246,16 +246,20 @@ test('terrain surrounds the track and stays below it', () => {
     assert.ok(res.terrain.length >= 1 && res.terrain.every((p) => p.name.startsWith('TERRAIN_') && p.material === 'terrain'));
     const k = readKn5(res.files['terrain/terrain.kn5']);
     assert.equal(k.consumed, k.total);
-    const cl = res.centerline;
+    const cl = res.centerline, g = res.geometry;
     let above = 0, near = 0;
     for (const p of res.terrain) for (let v = 0; v < p.positions.length; v += 3) {
         const x = p.positions[v], y = p.positions[v + 1], z = p.positions[v + 2];
         let bi = 0, bd = Infinity;
-        for (let i = 0; i < cl.points.length; i += 2) { const d = Math.hypot(cl.points[i].x - x, cl.points[i].y - z); if (d < bd) { bd = d; bi = i; } }
-        if (bd < 3.25 + 45) { near++; if (y > res.geometry.surfaceAt(bi, 0) - 1) above++; }
+        for (let i = 0; i < cl.points.length; i++) { const d = Math.hypot(cl.points[i].x - x, cl.points[i].y - z); if (d < bd) { bd = d; bi = i; } }
+        const t = cl.tangents[bi], lat = (x - cl.points[bi].x) * t.y + (z - cl.points[bi].y) * -t.x;
+        const reach = lat < 0 ? 3.25 + g.vergeReach(bi, -1) : 3.25 + g.vergeReach(bi, 1);
+        // Inside the built corridor the terrain must stay under the surface that is drawn there.
+        // (beside the road, not past its ends)
+        if (Math.abs(lat) < reach && bd - Math.abs(lat) < 3) { near++; if (y > g.surfaceAt(bi, lat) - 0.25) above++; }
     }
     assert.ok(near > 0);
-    assert.equal(above, 0, 'terrain vertices above the road near it');
+    assert.equal(above, 0, 'terrain vertices poking through the road or verge');
 });
 
 test('road markings: double yellow, edge lines, and a passing zone with 3 m dashes', () => {
@@ -283,4 +287,39 @@ test('road markings: double yellow, edge lines, and a passing zone with 3 m dash
     assert.ok(pass.geometry.parts.filter((p) => p.name.startsWith('PAINT')).every((p) => !/^\d/.test(p.name)));
     const circ = buildTrack({ name: 'C', polyline: kartCircuit(), heightSampler: flatLot, width: 8, circuit: true, terrain: false });
     assert.equal(yellow(circ).length, 0, 'no centre line on a circuit');
+});
+
+import { syntheticSite } from './fixtures.ts';
+import { aerialMacro, siteRegions } from '../ground.ts';
+import { demToPng, pngToDem, planSite } from '../site.ts';
+
+test('site data: lidar verge, aerial ground split by cell, road painted out, invisible walls', () => {
+    const site = syntheticSite(windingRoad(), slopedTerrain);
+    const plan = planSite(windingRoad(), { corridorM: 90, marginM: 300 });
+    assert.ok(plan.cells.length >= 3 && plan.cells.length <= 20, `cells ${plan.cells.length}`);
+    const res = buildTrack({ name: 'Site Rd', polyline: windingRoad(), heightSampler: slopedTerrain, width: 6.5, site });
+    const verge = res.geometry.parts.filter((p) => p.name.startsWith('1GRASS_'));
+    assert.ok(verge.length >= 2 && verge.every((p) => p.material.startsWith('aerial_')), 'verge pieces use aerial materials');
+    assert.ok(res.terrain.some((p) => p.material.startsWith('aerial_')));
+    const k = readKn5(res.files['site_rd/site_rd.kn5']);
+    assert.equal(k.consumed, k.total);
+    const nodes: ReadNode[] = []; walk(k.root, (n) => nodes.push(n));
+    assert.equal(nodes.find((n) => n.name === '1WALL_L')!.visible, false, 'boundary walls are invisible with site data');
+    // Every vertex of every aerial piece has UVs inside its region (0..1).
+    for (const p of [...verge, ...res.terrain.filter((t) => t.material.startsWith('aerial_'))]) for (const u of p.uvs) assert.ok(u >= 0 && u <= 1);
+    // The road stripe in the photo is replaced near the road in the macro.
+    const regions = siteRegions(site);
+    const r = regions[0];
+    const macro = aerialMacro({ ...r, texture: 64 }, site, res.centerline, res.geometry, 6.5 / 2 + 1);
+    let dark = 0;
+    for (let i = 0; i < macro.data.length; i += 4) if (macro.data[i] < 140 && macro.data[i + 1] < 140) dark++;
+    assert.equal(dark, 0, 'no asphalt-coloured pixels left in the ground texture');
+    assert.match(new TextDecoder().decode(res.files['site_rd/ui/ui_track.json']), /3DEP 1 m lidar/);
+});
+
+test('DEM storage: Terrarium PNG round trip keeps 1/256 m', () => {
+    const bbox = { west: -122.7, south: 45.3, east: -122.69, north: 45.31 };
+    const heights = new Float32Array(16).map((_, i) => 100 + i * 0.37);
+    const back = pngToDem(demToPng({ bbox, width: 4, height: 4, heights }), bbox);
+    for (let i = 0; i < 16; i++) assert.ok(Math.abs(back.heights[i] - heights[i]) < 1 / 256 + 1e-6);
 });

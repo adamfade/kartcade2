@@ -5,7 +5,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ArrowLeft, Box, Download, FileUp, Flag, Loader2, MapPin, Route as RouteIcon, Save, Search, Trash2 } from 'lucide-react';
-import { elevationSampler, geocode, racewaysNear, route as osrmRoute } from '../../../tools/trackbuilder/fetchers.ts';
+import { elevationTiles, geocode, racewaysNear, route as osrmRoute } from '../../../tools/trackbuilder/fetchers.ts';
+import { terrariumSampler } from '../../../tools/trackbuilder/elevation.ts';
+import type { SiteRasters } from '../../../tools/trackbuilder/site.ts';
+import { ensureSite, siteIdFor } from './siteStore';
+import { runHeavy } from './heavy';
 import type { NetOptions, Place, Raceway } from '../../../tools/trackbuilder/fetchers.ts';
 import type { HeightSampler, TilePixels } from '../../../tools/trackbuilder/elevation.ts';
 import type { LatLon } from '../../../tools/trackbuilder/geo.ts';
@@ -102,7 +106,12 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const [error, setError] = useState<string | null>(null);
 
     const [base, setBase] = useState<BuildResult | null>(null);
-    const sampler = useRef<{ key: string; fn: HeightSampler } | null>(null);
+    const sampler = useRef<{ key: string; fn: HeightSampler; z: number; tiles: Map<string, TilePixels> } | null>(null);
+    // Real ground: 1 m lidar + aerial imagery for the route, stored in Firebase and reused.
+    const [realGround, setRealGround] = useState(initial.realGround ?? true);
+    const [siteId, setSiteId] = useState<string | null>(initial.siteId ?? null);
+    const [siteNote, setSiteNote] = useState('');
+    const siteRef = useRef<{ id: string; site: SiteRasters } | null>(null);
     const [tool, setToolRaw] = useState<Tool | null>(null);
     const [pendingFrom, setPendingFrom] = useState<number | null>(null);
     const [toolOpts, setToolOpts] = useState<ToolOptions>({ side: 'both', density: 6, signStyle: 'kartcade', signText: '', bannerText: 'START', centre: 'passing-forward' });
@@ -253,7 +262,24 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             setLine(polyline);
         }
         const key = `${polyline.length}:${polyline[0].lat},${polyline[0].lon}:${polyline[polyline.length - 1].lat}`;
-        if (sampler.current?.key !== key) sampler.current = { key, fn: await elevationSampler(net, polyline, decodeTileInBrowser) };
+        if (sampler.current?.key !== key) {
+            const { z, tiles } = await elevationTiles(net, polyline, decodeTileInBrowser);
+            sampler.current = { key, fn: terrariumSampler(z, tiles), z, tiles };
+        }
+        if (realGround) {
+            const want = await siteIdFor(polyline);
+            if (siteRef.current?.id !== want) {
+                try {
+                    const r = await ensureSite(polyline, (m) => setLog((l) => [...l, m]));
+                    siteRef.current = { id: r.siteId, site: r.site };
+                    if (r.siteId !== siteId) { setSiteId(r.siteId); touch(); }
+                    setSiteNote(`Real ground: 1 m lidar + aerial photo (${r.site.cells.length} areas, fetched ${new Date(r.site.sources.fetched).toLocaleDateString()})${r.stored ? '' : ' — not saved; publish storage.rules'}`);
+                } catch (e) {
+                    siteRef.current = null;
+                    setSiteNote(`Real ground unavailable (${(e as Error).message}); using coarse elevation`);
+                }
+            }
+        }
         return { polyline, fn: sampler.current.fn };
     };
     const buildWith = (polyline: LatLon[], fn: HeightSampler, withElements: boolean) => buildTrack({
@@ -261,6 +287,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
         flipStart: flip, circuit: kind === 'circuit', reverse, gridSlots: parseInt(gridSlots, 10) || 12,
         city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements: withElements ? elements : elements.filter((e) => e.type === 'lines'),
         library: library.current ?? undefined, log: (m) => setLog((l) => [...l, m]),
+        site: realGround ? siteRef.current?.site : undefined,
         // The preview needs geometry and materials only; the download packs the full track.
         output: withElements ? 'full' : 'geometry',
     });
@@ -277,12 +304,15 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     // Rebuild the base when options that change its shape change (keeps the preview honest).
     // Centre-line stretches change the road markings, which are part of the base geometry.
     const linesKey = JSON.stringify(elements.filter((e) => e.type === 'lines'));
-    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}`;
+    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}`;
     const lastOpts = useRef(optsKey);
     useEffect(() => {
         if (lastOpts.current === optsKey) return;
         lastOpts.current = optsKey;
-        if (base && line && sampler.current) setBase(buildWith(line, sampler.current.fn, false));
+        if (base && line && sampler.current) {
+            if (realGround && !siteRef.current) buildPreview(); // fetch the site first
+            else setBase(buildWith(line, sampler.current.fn, false));
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [optsKey]);
 
@@ -294,9 +324,15 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const download = async () => {
         setBusy('download'); setLog([]); setError(null);
         try {
-            const { polyline, fn } = await buildInputs();
-            await new Promise((r) => setTimeout(r, 0));
-            const res = buildWith(polyline, fn, true);
+            const { polyline } = await buildInputs();
+            // The full build (aerial textures, DDS encoding, KN5, zip) runs in a worker so the page stays live.
+            const s = sampler.current!;
+            const input = {
+                name: name.trim() || 'Track', polyline, width: widthM(), walls, flipStart: flip, circuit: kind === 'circuit', reverse,
+                gridSlots: parseInt(gridSlots, 10) || 12, city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements,
+                library: library.current ?? undefined, site: realGround ? siteRef.current?.site : undefined,
+            };
+            const res = await runHeavy<{ zip: Uint8Array; id: string }>('buildTrack', { input, z: s.z, tiles: s.tiles }, [], (m) => setLog((l) => [...l, m]));
             const url = URL.createObjectURL(new Blob([res.zip], { type: 'application/zip' }));
             const a = document.createElement('a');
             a.href = url; a.download = `${res.id}.zip`; a.click();
@@ -311,7 +347,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             const id = await saveProject({
                 id: projectId, name: name.trim() || 'Untitled track', kind,
                 pins: pins ?? [], loop, line, width: parseFloat(width) || null, walls, flipStart: flip, reverse,
-                gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined,
+                gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined, siteId, realGround,
                 stats: base ? { lengthM: base.stats.lengthM, climbM: base.stats.climbM } : (initial.stats ?? null),
             }, currentUser?.email);
             if (!projectId) { setProjectId(id); navigate(`/admin/track-builder?id=${id}`, { replace: true }); }
@@ -443,7 +479,8 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                     <button type="button" disabled={!canBuild || !!busy} onClick={buildPreview} className="w-full py-3 rounded-lg bg-[#D42428] hover:bg-[#b91c1c] disabled:opacity-40 font-bold uppercase tracking-wider flex items-center justify-center gap-2">
                         {busy === 'preview' ? <><Loader2 className="w-4 h-4 animate-spin" /> Building…</> : <><Box className="w-4 h-4" /> {base ? 'Rebuild 3D preview' : 'Build 3D preview'}</>}
                     </button>
-                    <p className="text-[11px] text-white/40">{libStatus}</p>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={realGround} onChange={(e) => { setRealGround(e.target.checked); touch(); }} /> Real ground (1 m lidar + aerial photo)</label>
+                    <p className="text-[11px] text-white/40">{libStatus}{siteNote ? <><br />{siteNote}</> : null}</p>
                     {log.length > 0 && <div className="bg-black/40 rounded-lg p-3 text-[11px] font-mono text-white/50 max-h-32 overflow-auto">{log.map((l, i) => <div key={i}>{l}</div>)}</div>}
                     {base && (
                         <dl className="grid grid-cols-2 gap-2 text-sm">

@@ -200,6 +200,19 @@ export class MaterialBook {
     textures: Kn5Texture[] = [];
     materials: Kn5Material[] = [];
     private names = new Set<string>();
+    /** Lazy books keep generated images uncompressed (for the editor preview) instead of encoding DDS. */
+    lazy: boolean;
+    constructor(lazy = false) { this.lazy = lazy; }
+    /** A generated image texture: encoded to DDS now, or kept as RGBA in a lazy book. */
+    image(name: string, make: () => Rgba, opts: { format?: 'bc1' | 'bc3'; mips?: 'color' | 'normal' | 'linear' } = {}): string {
+        if (this.names.has(name)) return name;
+        if (this.lazy && !generated.has(name)) {
+            this.names.add(name);
+            this.textures.push({ name, data: new Uint8Array(0), rgba: make() });
+            return name;
+        }
+        return this.texture(name, () => encodeDds(make(), { format: opts.format ?? 'bc1', mips: opts.mips ?? 'color' }));
+    }
     texture(name: string, data: Uint8Array | (() => Uint8Array)): string {
         if (!this.names.has(name)) {
             this.names.add(name);
@@ -242,11 +255,11 @@ export function macroDetailMaterial(book: MaterialBook, lib: MaterialLibrary | u
     if (book.has(spec.name)) return spec.name;
     const e = entryFor(lib, spec.role);
     const lp = e.source.provider === 'polyhaven' ? `${e.source.asset}` : `proc_${e.role}`;
-    const txDiffuse = book.texture(`${spec.macro.key}.dds`, () => encodeDds(spec.macro.image(), { format: spec.macro.format ?? 'bc3' }));
+    const txDiffuse = book.image(`${spec.macro.key}.dds`, spec.macro.image, { format: spec.macro.format ?? 'bc3' });
     const txDetail = book.texture(`${lp}_detail.dds`, e.detail);
     const txNormalDetail = book.texture(`${lp}_normal.dds`, e.normal);
     const txNormal = book.texture('flat_normal.dds', FLAT_NORMAL);
-    const txMaps = spec.maps ? book.texture(`${spec.maps.key}.dds`, () => encodeDds(spec.maps!.image(), { mips: 'linear' })) : book.texture(`${lp}_maps.dds`, e.maps);
+    const txMaps = spec.maps ? book.image(`${spec.maps.key}.dds`, spec.maps.image, { mips: 'linear' }) : book.texture(`${lp}_maps.dds`, e.maps);
     return book.add({
         name: spec.name, shader: 'ksPerPixelMultiMap_NMDetail',
         properties: [
