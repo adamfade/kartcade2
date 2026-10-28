@@ -13,6 +13,9 @@ export interface MeshPart {
     uvs: number[]; // uv
     tangents: number[];
     indices: number[];
+    /** Drawn in game (default true). Invisible physics meshes give collision without a visible wall. */
+    visible?: boolean;
+    castShadows?: boolean;
 }
 
 export interface Dummy { name: string; position: V3; forward: V3 }
@@ -33,7 +36,17 @@ export interface MeshOptions {
     gridSlots?: number;
 }
 
-export interface TrackGeometry { parts: MeshPart[]; dummies: Dummy[]; roadHeightAt: (i: number, lateral: number) => number }
+export interface TrackGeometry {
+    parts: MeshPart[];
+    dummies: Dummy[];
+    /** Asphalt height at centreline index i and lateral offset (negative = left), clamped to the road. */
+    roadHeightAt: (i: number, lateral: number) => number;
+    /** Ground height at any lateral offset: asphalt, then the shoulder and verge as built. */
+    surfaceAt: (i: number, lateral: number) => number;
+    /** How far the verge reaches beyond the asphalt edge on one side (walls stand here). */
+    vergeReach: (i: number, side: -1 | 1) => number;
+    width: number;
+}
 
 const MAX_VERTS = 60000;
 
@@ -184,12 +197,15 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [(roadCols[j] + half) / W, sRow(i) / 8], tangent3);
 
     // Grass both sides: from the road edge outward, blending into the ground.
+    // prof[0] = left, prof[1] = right: offsets beyond the asphalt edge and their heights, per row.
+    const prof: { offs: number[]; ys: number[] }[][] = [new Array(n), new Array(n)];
     const sideRow = (i: number, side: -1 | 1) => {
         const edge = surf(i, side * half);
         const lim = reach(i, side);
         const offs = [0, shoulder, shoulder + 3, shoulder + 10, shoulder + 22, shoulder + verge].map((d) => Math.min(d, lim + shoulder));
         // Keep offsets strictly increasing even when clamped.
         for (let k = 1; k < offs.length; k++) offs[k] = Math.max(offs[k], offs[k - 1] + 0.05);
+        prof[side === -1 ? 0 : 1][i] = { offs: offs.slice(), ys: [] };
         const pts = offs.map((d, k) => {
             const lat = side * (half + d);
             const p = at(i, lat, 0);
@@ -199,6 +215,7 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
                 if (g != null && Number.isFinite(g)) y = edge + (g - edge) * smoothstep((d - shoulder) / (verge * 0.6));
             }
             p[1] = y;
+            prof[side === -1 ? 0 : 1][i].ys.push(y);
             return p;
         });
         return side === -1 ? pts.reverse() : pts; // columns left -> right
@@ -225,23 +242,6 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     // AC dummies. Positions on the road surface; forward = direction of travel.
     const on = (i: number, lat: number, up: number): V3 => at(i, lat, surf(i, lat) + up);
     const fwd = (i: number, flip = false): V3 => { const t = cl.tangents[i]; return flip ? [-t.x, 0, -t.y] : [t.x, 0, t.y]; };
-    if (closed) {
-        // Infield and surrounds: a flat grass floor just under the lowest verge, so gaps between clipped
-        // verges (inside the loop) show grass instead of sky. Walls keep cars out of those gaps.
-        let minY = Infinity, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-        for (const p of parts) for (let v = 0; v < p.positions.length; v += 3) {
-            minY = Math.min(minY, p.positions[v + 1]);
-            x0 = Math.min(x0, p.positions[v]); x1 = Math.max(x1, p.positions[v]);
-            z0 = Math.min(z0, p.positions[v + 2]); z1 = Math.max(z1, p.positions[v + 2]);
-        }
-        const pad = 150, y = minY - 0.25;
-        const cols = 9, rowsN = 9;
-        const rows: V3[][] = Array.from({ length: rowsN }, (_, r) => Array.from({ length: cols }, (_, c): V3 => [
-            x0 - pad + ((x1 - x0 + 2 * pad) * c) / (cols - 1), y, z0 - pad + ((z1 - z0 + 2 * pad) * r) / (rowsN - 1),
-        ]));
-        parts.push(...gridParts('1GRASS_GROUND', 'grass', rows, (r, c) => [rows[r][c][0] / 10, rows[r][c][2] / 10], () => [1, 0, 0]));
-    }
-
     const dummies: Dummy[] = closed ? circuitDummies(cl, half, on, fwd, opts.gridSlots ?? 12) : (() => {
         const idxAt = (sM: number) => Math.max(0, Math.min(n - 1, Math.round(sM / cl.spacing)));
         const flip = !!opts.flipStart;
@@ -265,7 +265,17 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
             { name: 'AC_AB_FINISH_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
         ];
     })();
-    return { parts, dummies, roadHeightAt: surf };
+    const surfaceAt = (i: number, lat: number) => {
+        if (Math.abs(lat) <= half) return surf(i, lat);
+        const p = prof[lat < 0 ? 0 : 1][i], d = Math.abs(lat) - half;
+        for (let k = 1; k < p.offs.length; k++) if (d <= p.offs[k]) {
+            const t = (d - p.offs[k - 1]) / (p.offs[k] - p.offs[k - 1] || 1);
+            return p.ys[k - 1] + (p.ys[k] - p.ys[k - 1]) * t;
+        }
+        return p.ys[p.ys.length - 1];
+    };
+    const vergeReach = (i: number, side: -1 | 1) => { const o = prof[side === -1 ? 0 : 1][i].offs; return o[o.length - 1]; };
+    return { parts, dummies, roadHeightAt: surf, surfaceAt, vergeReach, width: W };
 }
 
 /**

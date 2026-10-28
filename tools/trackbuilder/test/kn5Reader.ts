@@ -1,5 +1,5 @@
 // Minimal KN5 reader used only by the tests (round-trip check of the writer).
-export interface ReadNode { type: number; name: string; children: ReadNode[]; matrix?: number[]; vertexCount?: number; indexCount?: number; materialId?: number; maxIndex?: number; badNumbers?: number }
+export interface ReadNode { type: number; name: string; children: ReadNode[]; visible?: boolean; matrix?: number[]; vertexCount?: number; indexCount?: number; materialId?: number; maxIndex?: number; badNumbers?: number }
 
 export function readKn5(bytes: Uint8Array) {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -28,7 +28,7 @@ export function readKn5(bytes: Uint8Array) {
         const n: ReadNode = { type, name, children: [] };
         if (type === 1) { n.matrix = Array.from({ length: 16 }, f32); }
         else if (type === 2) {
-            u8(); u8(); u8();
+            u8(); n.visible = u8() === 1; u8();
             const vc = i32(); n.vertexCount = vc;
             let bad = 0;
             for (let v = 0; v < vc * 11; v++) { if (!Number.isFinite(f32())) bad++; }

@@ -9,6 +9,7 @@ import type { TilePixels } from './elevation.ts';
 import { dominantWidth, roadWidthFromTags } from './route.ts';
 import { buildTrack } from './pack.ts';
 import type { BuildResult } from './pack.ts';
+import type { TrackElement } from './elements.ts';
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 export type DecodeTile = (png: Uint8Array) => Promise<TilePixels> | TilePixels;
@@ -69,7 +70,7 @@ export async function roadWays(net: NetOptions, line: LatLon[]): Promise<{ tags:
 
 /** Fetch and decode the Terrarium tiles covering the road (+ verge), returning a height sampler. */
 export async function elevationSampler(net: NetOptions, line: LatLon[], decode: DecodeTile, z = 14) {
-    const tiles = tilesForBBox(bboxOf(line, 120), z);
+    const tiles = tilesForBBox(bboxOf(line, 400), z); // 400 m margin: the visual terrain around the track
     if (tiles.length > 64) throw new Error(`Road is too long for one build (${tiles.length} elevation tiles); split it`);
     const map = new Map<string, TilePixels>();
     for (const t of tiles) {
@@ -90,6 +91,7 @@ export interface BuildFromPinsInput {
     city?: string;
     useOverpass?: boolean;
     includeAi?: boolean;
+    elements?: TrackElement[];
 }
 
 export async function buildFromPins(net: NetOptions, decode: DecodeTile, input: BuildFromPinsInput): Promise<BuildResult & { routeDistanceM: number; widthSource: string }> {
@@ -113,7 +115,7 @@ export async function buildFromPins(net: NetOptions, decode: DecodeTile, input: 
     }
     log(`Road width ${width.toFixed(1)} m (${widthSource})`);
     const sampler = await elevationSampler(net, r.line, decode);
-    const result = buildTrack({ name: input.name, polyline: r.line, heightSampler: sampler, width, walls: input.walls, flipStart: input.flipStart, city: input.city, includeAi: input.includeAi, log });
+    const result = buildTrack({ name: input.name, polyline: r.line, heightSampler: sampler, width, walls: input.walls, flipStart: input.flipStart, city: input.city, includeAi: input.includeAi, elements: input.elements, log });
     return { ...result, routeDistanceM: r.distanceM, widthSource };
 }
 
@@ -156,6 +158,7 @@ export interface BuildFromTraceInput {
     flipStart?: boolean;
     city?: string;
     includeAi?: boolean;
+    elements?: TrackElement[];
 }
 
 /** Build from a traced line (no routing): circuits, or a road OSRM won't follow. */
@@ -166,6 +169,6 @@ export async function buildFromTrace(net: NetOptions, decode: DecodeTile, input:
     const sampler = await elevationSampler(net, input.line, decode);
     return buildTrack({
         name: input.name, polyline: input.line, heightSampler: sampler, width: input.width, walls: input.walls,
-        flipStart: input.flipStart, circuit: input.circuit, reverse: input.reverse, gridSlots: input.gridSlots, city: input.city, includeAi: input.includeAi, log,
+        flipStart: input.flipStart, circuit: input.circuit, reverse: input.reverse, gridSlots: input.gridSlots, city: input.city, includeAi: input.includeAi, elements: input.elements, log,
     });
 }

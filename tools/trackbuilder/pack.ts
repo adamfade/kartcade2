@@ -5,8 +5,12 @@ import { buildCenterline, signedArea } from './route.ts';
 import { roadProfile } from './elevation.ts';
 import type { HeightSampler, Profile } from './elevation.ts';
 import { buildGeometry } from './mesh.ts';
-import type { TrackGeometry } from './mesh.ts';
+import type { MeshPart, TrackGeometry } from './mesh.ts';
 import { trackMaterials, writeKn5 } from './kn5.ts';
+import type { Kn5Material, Kn5Texture } from './kn5.ts';
+import { buildElements } from './elements.ts';
+import { buildTerrain } from './terrain.ts';
+import type { ElementBuild, TrackElement } from './elements.ts';
 import { writeFastLane } from './aiLine.ts';
 
 export const INCLUDE_AI = false;
@@ -34,6 +38,10 @@ export interface BuildInput {
     gridSlots?: number;
     /** Include ai/fast_lane.ai. Defaults to INCLUDE_AI; set true to build a test copy with the AI line. */
     includeAi?: boolean;
+    /** Placed scenery (guard rails, trees, signs, banners). */
+    elements?: TrackElement[];
+    /** Visual terrain around the track from the elevation data (default true). */
+    terrain?: boolean;
     log?: (msg: string) => void;
 }
 
@@ -45,6 +53,13 @@ export interface BuildResult {
     centerline: Centerline;
     profile: Profile;
     geometry: TrackGeometry;
+    /** Scenery meshes, textures and materials (also inside the KN5). */
+    elements: ElementBuild;
+    /** Visual terrain meshes (also inside the KN5). */
+    terrain: MeshPart[];
+    /** The base textures and materials (road, grass, wall), for previews. */
+    textures: Kn5Texture[];
+    materials: Kn5Material[];
 }
 
 export function trackId(name: string) {
@@ -84,17 +99,24 @@ export function buildTrack(input: BuildInput): BuildResult {
     });
     const pitboxes = geometry.dummies.filter((d) => d.name.startsWith('AC_PIT_')).length;
     const clockwise = circuit && signedArea(cl.points) < 0;
-    const triangles = geometry.parts.reduce((a, p) => a + p.indices.length / 3, 0);
 
+    const terrain = input.terrain === false ? [] : buildTerrain(cl, geometry, { ground: (x, y) => input.heightSampler(cl.projection.toLatLon({ x, y })) });
+    if (terrain.length) log('Adding the surrounding terrain');
+    const elements = buildElements(cl, geometry, input.elements ?? []);
+    if (input.elements?.length) log(`Placed ${input.elements.length} scenery item${input.elements.length === 1 ? '' : 's'}`);
+    elements.warnings.forEach((w) => log(w));
+    const triangles = [...geometry.parts, ...elements.parts].reduce((a, p) => a + p.indices.length / 3, 0);
     log('Writing the KN5 model');
+    const textures: Kn5Texture[] = [
+        { name: 'asphalt.png', data: asphaltTexture(256, { centreLine: !circuit }) }, // circuits: edge lines only
+        { name: 'grass.png', data: grassTexture() },
+        { name: 'wall.png', data: concreteTexture() },
+    ];
+    const materials = trackMaterials();
     const kn5 = writeKn5({
-        textures: [
-            { name: 'asphalt.png', data: asphaltTexture() },
-            { name: 'grass.png', data: grassTexture() },
-            { name: 'wall.png', data: concreteTexture() },
-        ],
-        materials: trackMaterials(),
-        meshes: geometry.parts,
+        textures: [...textures, ...elements.textures],
+        materials: [...materials, ...elements.materials],
+        meshes: [...geometry.parts, ...elements.parts, ...terrain],
         dummies: geometry.dummies,
     });
 
@@ -178,7 +200,7 @@ export function buildTrack(input: BuildInput): BuildResult {
     log('Packing the zip');
     const zip = zipSync(files, { level: 6 });
     return {
-        id, files, zip, centerline: cl, profile, geometry,
+        id, files, zip, centerline: cl, profile, geometry, elements, terrain, textures, materials,
         stats: { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles },
     };
 }

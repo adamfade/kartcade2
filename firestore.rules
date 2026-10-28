@@ -100,6 +100,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     
+    // Track builder library — saved track projects (route, options, placed scenery). Admins only.
+    match /trackProjects/{projectId} {
+      allow read, write: if isAdmin();
+    }
+
     // Deny all other access by default
     match /{document=**} {
       allow read, write: if false;

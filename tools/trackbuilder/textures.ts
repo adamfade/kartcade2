@@ -38,7 +38,8 @@ function shade(img: RGBAImage, i: number, base: [number, number, number], n: num
  * Asphalt with markings. U runs across the road (0 = left edge, 1 = right edge), V along it.
  * White edge lines and a double yellow centre line, as on Oregon two-lane roads.
  */
-export function asphaltTexture(size = 256): Uint8Array {
+export function asphaltTexture(size = 256, opts: { centreLine?: boolean } = {}): Uint8Array {
+    const centreLine = opts.centreLine ?? true;
     const img = makeImage(size, size);
     const n = noiseImage(size, 7, [64, 128, 256]);
     for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
@@ -48,7 +49,7 @@ export function asphaltTexture(size = 256): Uint8Array {
         const edge = u < 0.035 && u > 0.012 || u > 0.965 && u < 0.988;
         const centre = Math.abs(u - 0.488) < 0.008 || Math.abs(u - 0.512) < 0.008;
         if (edge) shade(img, i, [225, 225, 220], n[i], 0.12);
-        else if (centre) shade(img, i, [220, 175, 40], n[i], 0.12);
+        else if (centre && centreLine) shade(img, i, [220, 175, 40], n[i], 0.12);
     }
     return encodePNG(img);
 }
@@ -69,4 +70,122 @@ export function concreteTexture(size = 128): Uint8Array {
 
 export function solidTexture(rgb: [number, number, number], size = 8): Uint8Array {
     return encodePNG(makeImage(size, size, [rgb[0], rgb[1], rgb[2], 255]));
+}
+
+// ---------------------------------------------------------------- element textures
+
+/** Guard rail steel: galvanised grey with the W-beam's two ridges as light bands. V runs up the beam. */
+export function steelTexture(size = 64): Uint8Array {
+    const img = makeImage(size, size);
+    const n = noiseImage(size, 31, [8, 64]);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const v = (y + 0.5) / size;
+        const ridge = 0.5 + 0.5 * Math.cos(v * Math.PI * 4); // two ridges, two valleys
+        const g = 120 + ridge * 70;
+        shade(img, y * size + x, [g, g + 3, g + 6], n[y * size + x], 0.12);
+    }
+    return encodePNG(img);
+}
+
+export function barkTexture(size = 64): Uint8Array {
+    const img = makeImage(size, size);
+    const n = noiseImage(size, 41, [4, 16, 64]);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const i = y * size + x;
+        const furrow = 0.5 + 0.5 * Math.sin((x / size) * Math.PI * 12 + n[i] * 4);
+        shade(img, i, [84 - furrow * 25, 60 - furrow * 18, 42 - furrow * 12], n[i], 0.4);
+    }
+    return encodePNG(img);
+}
+
+/** Douglas fir needles: dark blue-green with clumps. */
+export function needlesTexture(size = 128): Uint8Array {
+    const img = makeImage(size, size);
+    const n = noiseImage(size, 53, [8, 32, 128]);
+    for (let i = 0; i < size * size; i++) shade(img, i, [38, 66, 40], n[i], 0.7);
+    return encodePNG(img);
+}
+
+// 5x7 bitmap font. Each glyph = 7 rows, 5 bits per row (MSB = left column).
+const FONT: Record<string, number[]> = {
+    A: [14, 17, 17, 31, 17, 17, 17], B: [30, 17, 17, 30, 17, 17, 30], C: [14, 17, 16, 16, 16, 17, 14],
+    D: [30, 17, 17, 17, 17, 17, 30], E: [31, 16, 16, 30, 16, 16, 31], F: [31, 16, 16, 30, 16, 16, 16],
+    G: [14, 17, 16, 23, 17, 17, 15], H: [17, 17, 17, 31, 17, 17, 17], I: [14, 4, 4, 4, 4, 4, 14],
+    J: [7, 2, 2, 2, 2, 18, 12], K: [17, 18, 20, 24, 20, 18, 17], L: [16, 16, 16, 16, 16, 16, 31],
+    M: [17, 27, 21, 21, 17, 17, 17], N: [17, 17, 25, 21, 19, 17, 17], O: [14, 17, 17, 17, 17, 17, 14],
+    P: [30, 17, 17, 30, 16, 16, 16], Q: [14, 17, 17, 17, 21, 18, 13], R: [30, 17, 17, 30, 20, 18, 17],
+    S: [15, 16, 16, 14, 1, 1, 30], T: [31, 4, 4, 4, 4, 4, 4], U: [17, 17, 17, 17, 17, 17, 14],
+    V: [17, 17, 17, 17, 17, 10, 4], W: [17, 17, 17, 21, 21, 21, 10], X: [17, 17, 10, 4, 10, 17, 17],
+    Y: [17, 17, 10, 4, 4, 4, 4], Z: [31, 1, 2, 4, 8, 16, 31],
+    0: [14, 17, 19, 21, 25, 17, 14], 1: [4, 12, 4, 4, 4, 4, 14], 2: [14, 17, 1, 2, 4, 8, 31],
+    3: [31, 2, 4, 2, 1, 17, 14], 4: [2, 6, 10, 18, 31, 2, 2], 5: [31, 16, 30, 1, 1, 17, 14],
+    6: [6, 8, 16, 30, 17, 17, 14], 7: [31, 1, 2, 4, 8, 8, 8], 8: [14, 17, 17, 14, 17, 17, 14],
+    9: [14, 17, 17, 15, 1, 2, 12],
+    ' ': [0, 0, 0, 0, 0, 0, 0], '-': [0, 0, 0, 31, 0, 0, 0], '.': [0, 0, 0, 0, 0, 12, 12],
+    '!': [4, 4, 4, 4, 4, 0, 4], '/': [1, 1, 2, 4, 8, 16, 16], ':': [0, 12, 12, 0, 12, 12, 0],
+    "'": [4, 4, 8, 0, 0, 0, 0], '&': [12, 18, 20, 8, 21, 18, 13], '?': [14, 17, 1, 2, 4, 0, 4],
+};
+
+/** Upper-cases and drops characters the sign font doesn't have. */
+export function signText(t: string, max = 16): string {
+    return t.toUpperCase().split('').filter((c) => c in FONT).join('').slice(0, max).trim();
+}
+
+/** Draw text centred in a box, as large as fits. */
+function drawText(img: { width: number; height: number; data: Uint8Array }, text: string, box: { x: number; y: number; w: number; h: number }, rgb: [number, number, number]) {
+    const t = signText(text, 40);
+    if (!t) return;
+    const cols = t.length * 6 - 1; // 5 px glyph + 1 px gap
+    const px = Math.max(1, Math.floor(Math.min(box.w / cols, box.h / 7)));
+    const x0 = Math.round(box.x + (box.w - cols * px) / 2), y0 = Math.round(box.y + (box.h - 7 * px) / 2);
+    [...t].forEach((ch, k) => {
+        const g = FONT[ch];
+        for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++) if (g[r] & (16 >> c)) {
+            for (let yy = 0; yy < px; yy++) for (let xx = 0; xx < px; xx++) {
+                const X = x0 + (k * 6 + c) * px + xx, Y = y0 + r * px + yy;
+                if (X < 0 || Y < 0 || X >= img.width || Y >= img.height) continue;
+                const i = (Y * img.width + X) * 4;
+                img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2]; img.data[i + 3] = 255;
+            }
+        }
+    });
+}
+
+export type SignStyle = 'kartcade' | 'distance' | 'custom' | 'warning';
+
+/** Roadside sign face, 2:1. Kartcade red with white text; distance boards white on black; warning yellow. */
+export function signTexture(text: string, style: SignStyle): Uint8Array {
+    const W = 512, H = 256;
+    const colours: Record<SignStyle, { bg: [number, number, number]; fg: [number, number, number]; border: [number, number, number] }> = {
+        kartcade: { bg: [212, 36, 40], fg: [255, 255, 255], border: [255, 255, 255] },
+        distance: { bg: [18, 18, 20], fg: [255, 255, 255], border: [255, 255, 255] },
+        custom: { bg: [18, 18, 20], fg: [255, 255, 255], border: [212, 36, 40] },
+        warning: { bg: [245, 183, 0], fg: [18, 18, 20], border: [18, 18, 20] },
+    };
+    const c = colours[style];
+    const img = makeImage(W, H, [...c.bg, 255]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const b = Math.min(x, y, W - 1 - x, H - 1 - y);
+        if (b >= 10 && b < 18) { const i = (y * W + x) * 4; img.data[i] = c.border[0]; img.data[i + 1] = c.border[1]; img.data[i + 2] = c.border[2]; }
+    }
+    if (style === 'kartcade') {
+        drawText(img, text || 'KARTCADE', { x: 34, y: 40, w: W - 68, h: 120 }, c.fg);
+        drawText(img, 'WEST LINN OREGON', { x: 60, y: 172, w: W - 120, h: 42 }, c.fg);
+    } else drawText(img, text, { x: 34, y: 34, w: W - 68, h: H - 68 }, c.fg);
+    return encodePNG(img);
+}
+
+/** Start/finish gantry banner, 8:1: chequered ends, text in the middle. */
+export function bannerTexture(text: string): Uint8Array {
+    const W = 1024, H = 128;
+    const img = makeImage(W, H, [18, 18, 20, 255]);
+    const sq = 32;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        if (x >= 192 && x < W - 192) continue;
+        const white = (Math.floor(x / sq) + Math.floor(y / sq)) % 2 === 0;
+        const i = (y * W + x) * 4; const v = white ? 245 : 18;
+        img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v;
+    }
+    drawText(img, text, { x: 210, y: 18, w: W - 420, h: H - 36 }, [255, 255, 255]);
+    return encodePNG(img);
 }

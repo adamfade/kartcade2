@@ -8,7 +8,8 @@ profile, packed as a zip ready for `assettocorsa/content/tracks`.
 Two ways to run it, sharing the same library:
 
 - **Admin page:** `/admin/track-builder` on the Kartcade site (admins only; there's a "Track builder" button in the
-  dashboard's admin bar). Everything runs in the browser, and the zip downloads directly.
+  dashboard's admin bar). Everything runs in the browser, and the zip downloads directly. Tracks are saved in a
+  shared library, previewed in 3D, and dressed with guard rails, trees and signs (see below).
 - **CLI:** `npm run track -- ...`. See [CLI.md](CLI.md).
 
 ## Data sources and licenses
@@ -53,12 +54,34 @@ Model details:
   short). Pit boxes `AC_PIT_0..N-1` share the grid spots, since there is no pit lane. `AC_HOTLAP_START_0` is up
   to 120 m before the line.
 - **Verges never overlap:** each verge is cut off where it would get closer to another part of the same road
-  (a hairpin's other leg, a parallel straight) than to its own, and the wall goes there. Circuits also get a
-  flat grass floor under everything so infield gaps aren't sky.
+  (a hairpin's other leg, a parallel straight) than to its own, and the wall goes there. The terrain mesh fills
+  infield gaps on circuits.
 - **Road shape:** gentle crown, banking up to 4°, 1 m shoulders, 40 m of grass each side, and walls at the edge of
   the grass.
 - **Elevation:** smoothed with a median filter, then a Gaussian (sigma 18 m), and grades are clamped at 22%. Real
   DEM noise would otherwise make bumps.
+
+## Library, 3D preview and scenery (admin page)
+
+- **Library:** saved tracks live in the Firestore collection `trackProjects` (admin-only in `firestore.rules`;
+  publish the rules once in the Firebase console). A project stores the pins or loop, the built centreline,
+  the options and the scenery, so anyone with admin access can reopen it, change it and download it again.
+  Moving a pin re-routes the road, and scenery (placed by distance from the start) may then need a check.
+- **3D preview:** `pages/admin/trackbuilder/TrackPreview3D.tsx` (three.js) draws the same meshes and textures that go
+  into the KN5. Overview: orbit and zoom, with the route highlighted. Ground view: double-click a spot (or *Ground
+  view*), drag to look, W/S or the 25 m buttons to move, *Drive* to roll along at ~80 km/h.
+- **Scenery** (`elements.ts`), placed by clicking the preview:
+  - *Guard rail*: posts every 4 m and a W-beam 1.6 m off the asphalt, with an invisible collision wall
+    (`1WALL_GR_n`, hidden).
+  - *Trees*: Douglas-fir-like trees scattered along a stretch at a set density, or one at a time. Trunks have
+    collision (`1WALL_TREES_n`); crowns are kept clear of the asphalt.
+  - *Sign*: 2.4 x 1.2 m board on posts facing oncoming traffic: Kartcade, distance board, warning or custom
+    text (A–Z, 0–9, basic punctuation; drawn with a built-in font).
+  - *Start/finish banner*: chequered gantry across the road.
+  - Quick actions add start/finish banners, trees all the way and 300/200/100 boards.
+- **Terrain:** every build includes the surrounding ground from the same elevation data (`terrain.ts`, visual only,
+  `TERRAIN_n`), pushed below the track near it so it never shows through. Elevation tiles are fetched with a
+  400 m margin for it.
 
 ## Circuit mode
 
@@ -71,7 +94,7 @@ loop instead of a route:
 
 Differences from a road build: the loop closes (meshes, walls and the AI line join at the line), no end walls,
 lap timing at `AC_TIME_0`, 12 pit boxes, verges of 25 m, banking capped at 2°, elevation smoothed over 12 m and
-continuous across the line. `ui_track.json` says `clockwise` or `counter-clockwise`. *Drive the loop the other
+continuous across the line, and asphalt with edge lines only. `ui_track.json` says `clockwise` or `counter-clockwise`. *Drive the loop the other
 way round* (`--reverse`) keeps the same start/finish point.
 
 Circuit limits: no pit lane, no kerbs, one width all the way round, and the ~10 m elevation data means a kart

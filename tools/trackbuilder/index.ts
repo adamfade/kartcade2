@@ -8,3 +8,5 @@ export * from './pack.ts';
 export * from './png.ts';
 export * from './fetchers.ts';
 export * from './trace.ts';
+export * from './elements.ts';
+export * from './terrain.ts';

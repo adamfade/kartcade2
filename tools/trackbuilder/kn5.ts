@@ -89,7 +89,7 @@ export function writeKn5(opts: { textures: Kn5Texture[]; materials: Kn5Material[
         const mi = matIndex.get(m.material);
         if (mi == null) throw new Error(`Mesh ${m.name} uses unknown material ${m.material}`);
         w.i32(2); w.str(m.name); w.i32(0); w.bool(true);
-        w.bool(true); w.bool(true); w.bool(false); // castShadows, isVisible, isTransparent
+        w.bool(m.castShadows ?? true); w.bool(m.visible ?? true); w.bool(false); // castShadows, isVisible, isTransparent
         w.i32(vc);
         let cx = 0, cy = 0, cz = 0;
         for (let v = 0; v < vc; v++) {
@@ -118,15 +118,19 @@ export function writeKn5(opts: { textures: Kn5Texture[]; materials: Kn5Material[
     return w.out();
 }
 
-/** Standard track materials: ksPerPixel with a diffuse texture. */
-export function trackMaterials(): Kn5Material[] {
-    const base = (name: string, tex: string, spec = 0.05): Kn5Material => ({
+/** A ksPerPixel material with one diffuse texture. */
+export function ksMaterial(name: string, tex: string, spec = 0.05): Kn5Material {
+    return {
         name, shader: 'ksPerPixel',
         properties: [
             { name: 'ksAmbient', a: 0.45 }, { name: 'ksDiffuse', a: 0.55 }, { name: 'ksSpecular', a: spec },
             { name: 'ksSpecularEXP', a: 30 }, { name: 'ksEmissive', c: [0, 0, 0] }, { name: 'ksAlphaRef', a: 0 },
         ],
         textures: [{ sampler: 'txDiffuse', slot: 0, texture: tex }],
-    });
-    return [base('road', 'asphalt.png', 0.1), base('grass', 'grass.png', 0.02), base('wall', 'wall.png', 0.02)];
+    };
+}
+
+/** Standard track materials: ksPerPixel with a diffuse texture. */
+export function trackMaterials(): Kn5Material[] {
+    return [ksMaterial('road', 'asphalt.png', 0.1), ksMaterial('grass', 'grass.png', 0.02), ksMaterial('wall', 'wall.png', 0.02)];
 }

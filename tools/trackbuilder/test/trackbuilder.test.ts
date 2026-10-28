@@ -10,6 +10,7 @@ import { readKn5 } from './kn5Reader.ts';
 import type { ReadNode } from './kn5Reader.ts';
 import { flatLot, kartCircuit, slopedTerrain, windingRoad } from './fixtures.ts';
 import { writeFastLane } from '../aiLine.ts';
+import type { TrackElement } from '../elements.ts';
 import { parseTrace, rotateLoopTo } from '../trace.ts';
 
 test('centerline is evenly spaced, ends at the pins and keeps the length', () => {
@@ -187,4 +188,68 @@ test('trace files: GPX, KML and GeoJSON', () => {
     assert.equal(rot.length, 3, 'closing point dropped');
     assert.deepEqual(rot[0], { lat: 45.2, lon: -123.2 });
     assert.throws(() => parseTrace('hello'));
+});
+
+const SCENERY: TrackElement[] = [
+    { id: 'gr1', type: 'guardrail', from: 200, to: 600, side: 'both' },
+    { id: 'tr1', type: 'trees', from: 0, to: 1400, side: 'both', density: 8 },
+    { id: 't1', type: 'tree', at: 300, offset: -12 },
+    { id: 's1', type: 'sign', at: 80, side: 'right', style: 'kartcade', text: '' },
+    { id: 's2', type: 'sign', at: 900, side: 'left', style: 'distance', text: '200' },
+    { id: 'b1', type: 'banner', at: 30, text: 'Start' },
+];
+
+test('scenery: rails, trees, signs and banners go into the KN5 and stay off the road', () => {
+    const res = buildTrack({ name: 'Scenery Rd', polyline: windingRoad(), heightSampler: slopedTerrain, width: 6.5, elements: SCENERY });
+    const names = res.elements.parts.map((p) => p.name);
+    for (const want of ['GR_BEAM_0', '1WALL_GR_0', '1WALL_POSTS_0', '1WALL_TREES_0', 'TREES_NEEDLES_0', 'SIGN_BACKS_0', 'SIGN_FACE_0_0', 'SIGN_FACE_1_0', 'SIGN_FACE_2_0']) assert.ok(names.includes(want), `missing ${want}`);
+    assert.equal(res.elements.textures.filter((t) => t.name.startsWith('sign_')).length, 3);
+    const k = readKn5(res.files['scenery_rd/scenery_rd.kn5']);
+    assert.equal(k.consumed, k.total);
+    assert.ok(k.textures.some((t) => t.name === 'el_steel.png') && k.textures.some((t) => t.name === 'sign_2.png'));
+    const nodes: ReadNode[] = [];
+    walk(k.root, (n) => nodes.push(n));
+    assert.equal(nodes.find((n) => n.name === '1WALL_GR_0')!.visible, false, 'rail collision is invisible');
+    assert.equal(nodes.find((n) => n.name === 'GR_BEAM_0')!.visible, true);
+    for (const n of nodes) if (n.type === 2) { assert.equal(n.badNumbers, 0, n.name); assert.ok(n.maxIndex! < n.vertexCount!, n.name); }
+    // Nothing placed may sit on the asphalt: every element vertex is outside the road edge (banner beam excepted).
+    const cl = res.centerline, half = 6.5 / 2;
+    let onRoad = 0;
+    for (const p of res.elements.parts) {
+        if (p.name.startsWith('SIGN_FACE_2') || p.name.startsWith('SIGN_BACKS')) continue; // banner spans the road overhead
+        for (let v = 0; v < p.positions.length; v += 3) {
+            let best = Infinity;
+            for (const q of cl.points) best = Math.min(best, Math.hypot(q.x - p.positions[v], q.y - p.positions[v + 2]));
+            if (best < half + 0.1) onRoad++;
+        }
+    }
+    assert.equal(onRoad, 0, 'scenery vertices on the asphalt');
+    // Trees stand inside the walls.
+    const trunks = res.elements.parts.filter((p) => p.name.startsWith('1WALL_TREES'));
+    assert.ok(trunks.reduce((a, p) => a + p.positions.length / 3, 0) / 24 > 100, 'about 8 trees per 100 m per side');
+});
+
+test('scenery on a circuit wraps across the start/finish line', () => {
+    const res = buildTrack({ name: 'Wrap', polyline: kartCircuit(), heightSampler: flatLot, width: 8, circuit: true, elements: [{ id: 'g', type: 'guardrail', from: 900, to: 60, side: 'right' }] });
+    const beam = res.elements.parts.filter((p) => p.name.startsWith('GR_BEAM'));
+    const verts = beam.reduce((a, p) => a + p.positions.length / 3, 0);
+    // ~125 m of rail at 2 m steps, 8 vertices (two faces) per step.
+    assert.ok(verts > 400 && verts < 600, `beam vertices ${verts}`);
+});
+
+test('terrain surrounds the track and stays below it', () => {
+    const res = buildTrack({ name: 'Terrain', polyline: windingRoad(), heightSampler: slopedTerrain, width: 6.5 });
+    assert.ok(res.terrain.length >= 1 && res.terrain.every((p) => p.name.startsWith('TERRAIN_') && p.material === 'grass'));
+    const k = readKn5(res.files['terrain/terrain.kn5']);
+    assert.equal(k.consumed, k.total);
+    const cl = res.centerline;
+    let above = 0, near = 0;
+    for (const p of res.terrain) for (let v = 0; v < p.positions.length; v += 3) {
+        const x = p.positions[v], y = p.positions[v + 1], z = p.positions[v + 2];
+        let bi = 0, bd = Infinity;
+        for (let i = 0; i < cl.points.length; i += 2) { const d = Math.hypot(cl.points[i].x - x, cl.points[i].y - z); if (d < bd) { bd = d; bi = i; } }
+        if (bd < 3.25 + 45) { near++; if (y > res.geometry.surfaceAt(bi, 0) - 1) above++; }
+    }
+    assert.ok(near > 0);
+    assert.equal(above, 0, 'terrain vertices above the road near it');
 });
