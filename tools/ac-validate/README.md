@@ -81,7 +81,9 @@ npm test            # self-test: node test/selftest.mjs
 |---|---|---|
 | Header: int32 version (7), count, lapTime(?), sampleCount; then points of {vec3 pos, float length, int32 id} | parse FAIL | High on version, count and point layout. **Low on what fields 3–4 of the header mean** |
 | Extra block: int32 count equal to the point count, then 18 floats per point (speed, gas, brake, latG, radius, sideLeft, sideRight, camber, direction, normal×3, length, forward×3, tag, grade) | FAIL on count mismatch or truncation | Medium (field order from memory of AcTools) |
-| Bytes after the extra block (grid/cache) | INFO, not validated | Low (I'm not sure what is in it) |
+| int32 has-grid flag after the extra block | FAIL if missing (the file is truncated; AC reads this flag) | High: layout matches AcTools' `AiSpline` reader |
+| Grid block when the flag is set (extremes, neighbour count, density, rows of cells of point indices) | FAIL if malformed or an index is out of range | Medium |
+| Bytes left after the grid | WARN | High |
 | No NaN/Inf; at least 2 points (WARN under 50) | FAIL / WARN | High |
 | `length` never decreases | FAIL | High |
 | Length deltas match the distance between points within 5%; gaps over 20 m; ids equal to their index; first length about 0 | WARN | Medium |
@@ -138,7 +140,7 @@ The corrupted variants are: bad magic, truncated kn5, index out of range, NaN po
 ## Least-certain format details
 
 1. **Skinned mesh (class 3) layout**: the bone block and the fields after the indices. Tracks rarely use it, so it raises a WARN.
-2. **fast_lane.ai header fields 3–4 and the extra-block field order**. Version 7 with 18 floats is my best recollection. The trailing grid/cache block isn't parsed.
+2. **fast_lane.ai header fields 3–4 and the extra-block field order**. Version 7 with 18 floats is my best recollection. The trailing has-grid flag and grid block are now parsed (layout checked against AcTools' `AiSpline`/`AiSplineGrid` readers); what AC does with a file whose flag is 0 is still unconfirmed in game.
 3. **KN5 version-6 extra header int**: I'm sure it is there and 4 bytes long, but not what it means.
 4. **Bounding sphere space** (mesh-local or world). Only a WARN depends on it.
 5. **How AC matches physics names to keys** (prefix after the digits, case sensitivity) and **which keys AC's system surfaces.ini provides**.

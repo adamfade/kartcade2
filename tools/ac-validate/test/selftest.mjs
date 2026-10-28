@@ -153,6 +153,7 @@ const cases = [
   { name: 'AI points off the road', expect: 'fail', grep: /farther than the road width/, mod: (s) => { s.ai.slice(50, 80).forEach((p) => { p.p[0] *= 1.6; p.p[2] *= 1.6; }); } },
   { name: 'AI length not monotonic', expect: 'fail', grep: /length decreases/, mod: (s) => { s.ai[120].length = 1; } },
   { name: 'AI file truncated', expect: 'fail', grep: /parse error|does not fit|truncated/, mod: (s) => { const b = writeAi(s.ai); s.aiBuf = b.subarray(0, b.length - 1000); } },
+  { name: 'AI file missing has-grid flag', expect: 'fail', grep: /has-grid flag is missing/, mod: (s) => { s.aiBuf = writeAi(s.ai, { gridFlag: false }); } },
   { name: 'missing map.png', expect: 'fail', grep: /map\.png missing/, mod: (s) => { s.extra['map.png'] = null; } },
   { name: 'no kn5 at all', expect: 'fail', grep: /no test_ring\.kn5/, mod: (s) => { s.extra[`${ID}.kn5`] = null; } },
   { name: 'missing fast_lane.ai warns only', expect: 'warn', grep: /fast_lane\.ai missing/, mod: (s) => { s.extra['ai/fast_lane.ai'] = null; } },

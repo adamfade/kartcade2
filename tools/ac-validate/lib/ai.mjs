@@ -6,7 +6,10 @@
 //   extraCount x 18 f32 (version 7):
 //     speed, gas, brake, obsoleteLatG, radius, sideLeft, sideRight, camber, direction,
 //     normal[3], length, forward[3], tag, grade                                   (72 bytes)
-//   optional trailing data (grid / cache) - not validated.
+//   int32 hasGrid; if non-zero, a spatial lookup grid follows:
+//     f32[3] maxExtreme, f32[3] minExtreme, int32 neighborsConsidered, f32 samplingDensity,
+//     int32 itemCount, itemCount x { int32 subCount, subCount x { int32 n, n x int32 pointIndex } }
+//   AC's loader reads the hasGrid flag, so a v7 file that stops right after the extra data is truncated.
 
 import { Reader, FormatError } from './binreader.mjs';
 
@@ -64,8 +67,36 @@ export function parseAi(buf) {
     out.notes.push(`extra-data section truncated: need ${count * stride * 4} bytes, ${r.remaining} left`);
     out.truncatedExtra = true;
   }
+  if (out.extra && version === 7) readGrid(r, out, count);
   out.trailingBytes = r.remaining;
   return out;
+}
+
+function readGrid(r, out, count) {
+  if (r.remaining < 4) { out.gridFlagMissing = true; return; }
+  const flag = r.i32();
+  out.hasGrid = flag !== 0;
+  if (!out.hasGrid) return;
+  try {
+    const maxE = [r.f32(), r.f32(), r.f32()], minE = [r.f32(), r.f32(), r.f32()];
+    const neighbors = r.i32(), density = r.f32();
+    const items = r.i32();
+    if (items < 0 || items * 4 > r.remaining) throw new FormatError(`grid item count ${items} does not fit`, r.o);
+    let cells = 0, refs = 0, badRefs = 0;
+    for (let i = 0; i < items; i++) {
+      const subs = r.i32();
+      if (subs < 0 || subs * 4 > r.remaining) throw new FormatError(`grid row ${i} count ${subs} does not fit`, r.o);
+      for (let j = 0; j < subs; j++) {
+        const k = r.i32();
+        if (k < 0 || k * 4 > r.remaining) throw new FormatError(`grid cell ${i}/${j} count ${k} does not fit`, r.o);
+        cells++;
+        for (let m = 0; m < k; m++) { const v = r.i32(); refs++; if (v < 0 || v >= count) badRefs++; }
+      }
+    }
+    out.grid = { maxE, minE, neighbors, density, items, cells, refs, badRefs };
+  } catch (e) {
+    out.gridError = e.message;
+  }
 }
 
 export function extraField(ai, i, field) {

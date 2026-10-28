@@ -67,7 +67,7 @@ export function writeKn5({ version = 6, textures = [], materials = [], root, mag
 }
 
 // points: [{p:[x,y,z], length, side:[l,r], speed}]
-export function writeAi(points, { version = 7, extra = true } = {}) {
+export function writeAi(points, { version = 7, extra = true, gridFlag = true } = {}) {
   const w = new W();
   w.i32(version); w.i32(points.length); w.i32(0); w.i32(points.length);
   points.forEach((pt, i) => { pt.p.forEach((x) => w.f32(x)); w.f32(pt.length); w.i32(pt.id ?? i); });
@@ -79,6 +79,7 @@ export function writeAi(points, { version = 7, extra = true } = {}) {
       f[10] = 1; f[12] = pt.length;
       f.forEach((x) => w.f32(x));
     }
+    if (gridFlag) w.i32(0);
   }
   return w.done();
 }

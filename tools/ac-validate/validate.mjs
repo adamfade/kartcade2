@@ -651,7 +651,14 @@ function checkAi(R, name, buf, { grid, isCircuit, ui, mapIni, verbose, isPit }) 
   else R.warn(`version ${ai.version} (expected 7), ${ai.count} points`);
   ai.notes.forEach((n) => (/does not match|truncated/.test(n) ? R.fail(n) : R.warn(n)));
   if (ai.extra) R.pass(`extra data: ${ai.extraStride} floats per point`);
-  if (ai.trailingBytes) R.info(`${ai.trailingBytes} trailing bytes after the extra data (grid/cache; not validated)`);
+  if (ai.gridFlagMissing) R.fail('file ends right after the extra data: the int32 has-grid flag is missing (AC reads past the end of the file)');
+  else if (ai.gridError) R.fail(`grid section malformed: ${ai.gridError}`);
+  else if (ai.grid) {
+    const g = ai.grid;
+    if (g.badRefs) R.fail(`grid references ${g.badRefs} point index(es) outside 0..${ai.count - 1}`);
+    else R.pass(`grid present: ${g.items} x ${g.cells / Math.max(1, g.items)} cells, ${g.refs} point refs, density ${fmt(g.density)}, neighbours ${g.neighbors}`);
+  } else if (ai.hasGrid === false) R.info('has-grid flag is 0 (no precomputed lookup grid)');
+  if (ai.trailingBytes) R.warn(`${ai.trailingBytes} unexpected trailing byte(s) after the AI data`);
   if (ai.count < 2) { R.fail(`only ${ai.count} point(s)`); return null; }
   if (ai.count < 50 && !isPit) R.warn(`only ${ai.count} points; AI recorded by AC usually has one point every ~1 m`);
 
