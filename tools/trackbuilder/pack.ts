@@ -6,7 +6,11 @@ import { roadProfile } from './elevation.ts';
 import type { HeightSampler, Profile } from './elevation.ts';
 import { buildGeometry } from './mesh.ts';
 import type { MeshPart, TrackGeometry } from './mesh.ts';
-import { trackMaterials, writeKn5 } from './kn5.ts';
+import { writeKn5 } from './kn5.ts';
+import { MaterialBook, entryFor, macroDetailMaterial, paintMacro, photoMaterial, roadMacro, solidMacro } from './materials.ts';
+import type { MaterialLibrary } from './materials.ts';
+import { MACRO_M } from './mesh.ts';
+import type { MarkingPlan } from './mesh.ts';
 import type { Kn5Material, Kn5Texture } from './kn5.ts';
 import { buildElements } from './elements.ts';
 import { buildTerrain } from './terrain.ts';
@@ -14,7 +18,6 @@ import type { ElementBuild, TrackElement } from './elements.ts';
 import { writeFastLane } from './aiLine.ts';
 
 export const INCLUDE_AI = false;
-import { asphaltTexture, concreteTexture, grassTexture } from './textures.ts';
 import { drawPolyline, encodePNG, makeImage } from './png.ts';
 import type { LatLon } from './geo.ts';
 import type { Centerline } from './route.ts';
@@ -42,6 +45,12 @@ export interface BuildInput {
     elements?: TrackElement[];
     /** Visual terrain around the track from the elevation data (default true). */
     terrain?: boolean;
+    /** Photo-scanned material library (from the admin page's library import). Procedural stand-ins if absent. */
+    library?: MaterialLibrary;
+    /** Road markings (centre line style, edge lines, passing-zone overrides). */
+    markings?: MarkingPlan;
+    /** 'geometry' skips the KN5, AI line, maps and zip (for the editor's preview); default 'full'. */
+    output?: 'full' | 'geometry';
     log?: (msg: string) => void;
 }
 
@@ -70,12 +79,62 @@ export function trackId(name: string) {
 const ini = (sections: Record<string, Record<string, string | number>>) =>
     Object.entries(sections).map(([h, kv]) => `[${h}]\n${Object.entries(kv).map(([k, v]) => `${k}=${v}`).join('\n')}\n`).join('\n');
 
+/**
+ * The ground materials every track uses. All are ksPerPixelMultiMap_NMDetail over the library (see
+ * materials.ts); macro colours start from the photographed material's own mean colour.
+ */
+function buildSurfaceMaterials(id: string, lib: MaterialLibrary | undefined, circuit: boolean, width: number): MaterialBook {
+    const book = new MaterialBook();
+    const roadRole = circuit ? 'asphalt_track' : 'asphalt';
+    const road = entryFor(lib, roadRole);
+    let rm: ReturnType<typeof roadMacro> | null = null;
+    const roadM = () => (rm ??= roadMacro(width, MACRO_M.road, road.mean, { lanes: circuit ? 1 : 2, seed: id.length * 31 + 7 }));
+    macroDetailMaterial(book, lib, {
+        name: 'road', role: roadRole, specular: 0.2, specularExp: 30, reflection: 0.15,
+        macro: { key: `road_macro_${Math.round(width * 10)}_${circuit ? 1 : 2}_${id.length}`, image: () => roadM().image, sizeM: MACRO_M.road },
+        maps: { key: `road_maps_${Math.round(width * 10)}_${circuit ? 1 : 2}_${id.length}`, image: () => roadM().maps },
+    });
+    const gravel = entryFor(lib, 'gravel'), grass = entryFor(lib, 'grass');
+    macroDetailMaterial(book, lib, { name: 'shoulder', role: 'gravel', macro: { key: 'shoulder_macro', image: () => solidMacro(gravel.mean, 128, 0.15, 3), sizeM: MACRO_M.shoulder }, specular: 0.08 });
+    macroDetailMaterial(book, lib, { name: 'verge', role: 'grass', macro: { key: 'verge_macro', image: () => solidMacro(grass.mean, 256, 0.18, 5), sizeM: MACRO_M.verge }, specular: 0.04, reflection: 0.02 });
+    macroDetailMaterial(book, lib, { name: 'terrain', role: 'grass', macro: { key: 'terrain_macro', image: () => solidMacro(grass.mean.map((c) => c * 0.92) as [number, number, number], 256, 0.25, 9), sizeM: MACRO_M.terrain }, specular: 0.03, reflection: 0.02 });
+    macroDetailMaterial(book, lib, { name: 'paint_white', role: roadRole, macro: { key: 'paint_white_macro', image: () => paintMacro([232, 232, 226], 13), sizeM: MACRO_M.paint }, specular: 0.25, reflection: 0.1 });
+    macroDetailMaterial(book, lib, { name: 'paint_yellow', role: roadRole, macro: { key: 'paint_yellow_macro', image: () => paintMacro([224, 172, 38], 17), sizeM: MACRO_M.paint }, specular: 0.25, reflection: 0.1 });
+    photoMaterial(book, lib, 'wall', 'concrete');
+    return book;
+}
+
+/** Road markings: the default for the track type, plus any centre-line stretches placed in the editor. */
+function markingPlan(input: BuildInput, circuit: boolean): MarkingPlan {
+    const base: MarkingPlan = input.markings ?? { centre: circuit ? 'none' : 'double-solid', edges: true };
+    const placed = (input.elements ?? []).flatMap((e) => (e.type === 'lines' ? [{ from: e.from, to: e.to, centre: e.centre }] : []));
+    return { ...base, overrides: [...(base.overrides ?? []), ...placed] };
+}
+
+/** Custom Shaders Patch config: GrassFX on the grass, RainFX surface classes. Ignored without CSP. */
+function extConfig(): string {
+    return [
+        '; Custom Shaders Patch settings for this track (generated by the Kartcade track builder).',
+        '[GRASS_FX]',
+        'GRASS_MATERIALS = verge, terrain',
+        'OCCLUDING_MATERIALS = road, shoulder, paint_white, paint_yellow',
+        '',
+        '[RAIN_FX]',
+        'PUDDLES_MATERIALS = road',
+        'SOAKING_MATERIALS = verge, terrain, shoulder',
+        'SMOOTH_MATERIALS = paint_white, paint_yellow',
+        'ROUGH_MATERIALS = shoulder',
+        '',
+    ].join('\n');
+}
+
 function surfacesIni() {
     const base = { WAV: '', WAV_PITCH: 0, FF_EFFECT: 'NULL', DIRT_ADDITIVE: 0, IS_PITLANE: 0, BLACK_FLAG_TIME: 0, SIN_HEIGHT: 0, SIN_LENGTH: 0, VIBRATION_GAIN: 0, VIBRATION_LENGTH: 0 };
     return ini({
         SURFACE_0: { KEY: 'ROAD', FRICTION: 0.97, DAMPING: 0, ...base, IS_VALID_TRACK: 1 },
         SURFACE_1: { KEY: 'GRASS', FRICTION: 0.6, DAMPING: 0.1, ...base, WAV: 'grass.wav', WAV_PITCH: 0, DIRT_ADDITIVE: 1, IS_VALID_TRACK: 0, SIN_HEIGHT: 0.03, SIN_LENGTH: 0.5, VIBRATION_GAIN: 1, VIBRATION_LENGTH: 1.5 },
         SURFACE_2: { KEY: 'WALL', FRICTION: 0.3, DAMPING: 0, ...base, IS_VALID_TRACK: 0 },
+        SURFACE_3: { KEY: 'GRAVEL', FRICTION: 0.8, DAMPING: 0.02, ...base, WAV: 'gravel.wav', DIRT_ADDITIVE: 0.6, IS_VALID_TRACK: 1, SIN_HEIGHT: 0.01, SIN_LENGTH: 0.3, VIBRATION_GAIN: 0.6, VIBRATION_LENGTH: 0.5 },
     });
 }
 
@@ -95,7 +154,7 @@ export function buildTrack(input: BuildInput): BuildResult {
     log('Building road, verges and walls');
     const geometry = buildGeometry(cl, profile.heights, {
         width: input.width, walls: input.walls ?? true, ground, flipStart: circuit ? false : input.flipStart,
-        gridSlots: input.gridSlots, ...(circuit ? { verge: 25, maxBankDeg: 2 } : {}),
+        gridSlots: input.gridSlots, markings: markingPlan(input, circuit), ...(circuit ? { verge: 25, maxBankDeg: 2 } : {}),
     });
     const pitboxes = geometry.dummies.filter((d) => d.name.startsWith('AC_PIT_')).length;
     const clockwise = circuit && signedArea(cl.points) < 0;
@@ -106,13 +165,14 @@ export function buildTrack(input: BuildInput): BuildResult {
     if (input.elements?.length) log(`Placed ${input.elements.length} scenery item${input.elements.length === 1 ? '' : 's'}`);
     elements.warnings.forEach((w) => log(w));
     const triangles = [...geometry.parts, ...elements.parts].reduce((a, p) => a + p.indices.length / 3, 0);
+    const book = buildSurfaceMaterials(id, input.library, circuit, input.width);
+    const textures = book.textures, materials = book.materials;
+    const lengthM = Math.round(cl.length);
+    const stats = { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles };
+    if (input.output === 'geometry') {
+        return { id, files: {}, zip: new Uint8Array(0), centerline: cl, profile, geometry, elements, terrain, textures, materials, stats };
+    }
     log('Writing the KN5 model');
-    const textures: Kn5Texture[] = [
-        { name: 'asphalt.png', data: asphaltTexture(256, { centreLine: !circuit }) }, // circuits: edge lines only
-        { name: 'grass.png', data: grassTexture() },
-        { name: 'wall.png', data: concreteTexture() },
-    ];
-    const materials = trackMaterials();
     const kn5 = writeKn5({
         textures: [...textures, ...elements.textures],
         materials: [...materials, ...elements.materials],
@@ -152,7 +212,6 @@ export function buildTrack(input: BuildInput): BuildResult {
         return encodePNG(img);
     };
 
-    const lengthM = Math.round(cl.length);
     const uiTrack = {
         name: input.name,
         description: `${input.name}, built from the real ${circuit ? 'circuit' : 'road'}. ${circuit ? `Circuit, ${(cl.length / 1000).toFixed(2)} km lap, ${pitboxes} pit boxes` : `Point to point, ${(cl.length / 1000).toFixed(1)} km, ${Math.round(profile.climb)} m of climb`}. Road data © OpenStreetMap contributors (ODbL); elevation from Mapzen/AWS Terrain Tiles (USGS 3DEP, SRTM). Made for Kartcade.`,
@@ -189,6 +248,7 @@ export function buildTrack(input: BuildInput): BuildResult {
         // AI spline left out until its format is confirmed against a file recorded in game (v7 crashed AC on load).
         ...((input.includeAi ?? INCLUDE_AI) ? { [`${id}/ai/fast_lane.ai`]: ai } : {}),
         [`${id}/data/surfaces.ini`]: enc.encode(surfacesIni()),
+        [`${id}/extension/ext_config.ini`]: enc.encode(extConfig()),
         [`${id}/data/cameras.ini`]: enc.encode(cameras),
         [`${id}/data/map.ini`]: enc.encode(mapIni),
         [`${id}/map.png`]: encodePNG(map),
@@ -200,7 +260,6 @@ export function buildTrack(input: BuildInput): BuildResult {
     log('Packing the zip');
     const zip = zipSync(files, { level: 6 });
     return {
-        id, files, zip, centerline: cl, profile, geometry, elements, terrain, textures, materials,
-        stats: { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles },
+        id, files, zip, centerline: cl, profile, geometry, elements, terrain, textures, materials, stats,
     };
 }

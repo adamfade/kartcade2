@@ -34,6 +34,8 @@ export interface MeshOptions {
     flipStart?: boolean;
     /** Circuit: number of grid slots and pit boxes (default 12). */
     gridSlots?: number;
+    /** Road markings; default double yellow centre and white edge lines on roads, white edges on circuits. */
+    markings?: MarkingPlan;
 }
 
 export interface TrackGeometry {
@@ -49,6 +51,21 @@ export interface TrackGeometry {
 }
 
 const MAX_VERTS = 60000;
+
+/**
+ * Real-world size (metres) of one macro texture repeat per surface material. Mesh UVs are metres / this size,
+ * and materials.ts derives detail tiling from it, so the two always agree.
+ */
+export const MACRO_M = { road: 48, shoulder: 16, verge: 64, terrain: 64, paint: 4 } as const;
+
+/** Centre line styles (Oregon practice: 4 in yellow lines, 4 in apart; dashes 10 ft with 30 ft gaps). */
+export type CentreStyle = 'double-solid' | 'passing-forward' | 'passing-back' | 'dashed' | 'none';
+export interface MarkingPlan {
+    centre: CentreStyle;
+    edges: boolean;
+    /** Stretches with a different centre line (passing zones), metres from the start. */
+    overrides?: { from: number; to: number; centre: CentreStyle }[];
+}
 
 function sub(a: V3, b: V3): V3 { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
 function cross(a: V3, b: V3): V3 { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
@@ -194,7 +211,7 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     const roadCols = [-half, -half / 2, 0, half / 2, half];
     const roadRows = Array.from({ length: rowCount }, (_, i) => roadCols.map((lat) => at(ix(i), lat, surf(ix(i), lat))));
     const tangent3 = (i: number): V3 => { const r = right(ix(i)); return [r.x, 0, r.y]; };
-    const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [(roadCols[j] + half) / W, sRow(i) / 8], tangent3);
+    const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [0.5 + roadCols[j] / MACRO_M.road, sRow(i) / MACRO_M.road], tangent3);
 
     // Grass both sides: from the road edge outward, blending into the ground.
     // prof[0] = left, prof[1] = right: offsets beyond the asphalt edge and their heights, per row.
@@ -222,8 +239,21 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     };
     const Lr = Array.from({ length: n }, (_, i) => sideRow(i, -1)), Rr = Array.from({ length: n }, (_, i) => sideRow(i, 1));
     const L = Array.from({ length: rowCount }, (_, i) => Lr[ix(i)]), R = Array.from({ length: rowCount }, (_, i) => Rr[ix(i)]);
-    parts.push(...gridParts('1GRASS_L', 'grass', L, (i, j) => [L[i][j][0] / 10, sRow(i) / 10], tangent3));
-    parts.push(...gridParts('1GRASS_R', 'grass', R, (i, j) => [R[i][j][0] / 10, sRow(i) / 10], tangent3));
+    // Columns: L rows run outer edge -> asphalt edge (k = 5..0), R rows asphalt edge -> outer edge (k = 0..5).
+    // The first strip (asphalt edge to edge + shoulder) is the gravel shoulder; the rest is the grass verge.
+    const nc = L[0].length;
+    // Shoulder strips: Ls columns are [edge + shoulder, asphalt edge], Rs columns are [asphalt edge, edge + shoulder].
+    const shU = (lat: number) => 0.5 + lat / MACRO_M.shoulder;
+    const worldUv = (rows: V3[][]) => (i: number, j: number): [number, number] => [rows[i][j][0] / MACRO_M.verge, rows[i][j][2] / MACRO_M.verge];
+    const Ls = L.map((r) => r.slice(nc - 2)), Rs = R.map((r) => r.slice(0, 2));
+    const Lv = L.map((r) => r.slice(0, nc - 1)), Rv = R.map((r) => r.slice(1));
+    parts.push(...gridParts('1GRAVEL_L', 'shoulder', Ls, (i, j) => [shU(j === 0 ? -(half + shoulder) : -half), sRow(i) / MACRO_M.shoulder], tangent3));
+    parts.push(...gridParts('1GRAVEL_R', 'shoulder', Rs, (i, j) => [shU(j === 0 ? half : half + shoulder), sRow(i) / MACRO_M.shoulder], tangent3));
+    parts.push(...gridParts('1GRASS_L', 'verge', Lv, worldUv(Lv), tangent3));
+    parts.push(...gridParts('1GRASS_R', 'verge', Rv, worldUv(Rv), tangent3));
+
+    // Road markings: thin painted strips 12 mm above the asphalt, following its crown and banking.
+    parts.push(...markingParts(cl, opts.markings ?? (closed ? { centre: 'none', edges: true } : { centre: 'double-solid', edges: true }), half, surf, at));
 
     if (opts.walls ?? true) {
         const h = opts.wallHeight ?? 2.5;
@@ -302,4 +332,81 @@ function circuitDummies(cl: Centerline, half: number, on: (i: number, lat: numbe
     dummies.push({ name: 'AC_TIME_0_L', position: on(0, -half - 1, 1), forward: fwd(0) });
     dummies.push({ name: 'AC_TIME_0_R', position: on(0, half + 1, 1), forward: fwd(0) });
     return dummies;
+}
+
+/** Painted lines as their own meshes (PAINT_WHITE_n, PAINT_YELLOW_n): no physics, so they never change grip. */
+function markingParts(cl: Centerline, plan: MarkingPlan, half: number, surf: (i: number, lat: number) => number,
+    at: (i: number, lat: number, y: number) => V3): MeshPart[] {
+    const LINE = 0.1, GAP = 0.1, LIFT = 0.012, DASH = 3.05, PERIOD = 12.2, STEP = 1;
+    const L = cl.length, n = cl.points.length;
+    const styleAt = (sM: number): CentreStyle => {
+        for (const o of plan.overrides ?? []) {
+            const inside = o.from <= o.to ? sM >= o.from && sM <= o.to : sM >= o.from || sM <= o.to; // wraps on a circuit
+            if (inside) return o.centre;
+        }
+        return plan.centre;
+    };
+    // Position on the painted surface at distance sM (interpolated between centreline samples).
+    const spot = (sM: number, lat: number): V3 => {
+        let x = cl.closed ? ((sM % L) + L) % L : Math.max(0, Math.min(L, sM));
+        let lo = 0, hi = n - 1;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cl.s[mid] <= x) lo = mid; else hi = mid - 1; }
+        const nxt = cl.closed ? (lo + 1) % n : Math.min(n - 1, lo + 1);
+        const segEnd = nxt === 0 && cl.closed ? L : cl.s[nxt];
+        const t = segEnd > cl.s[lo] ? (x - cl.s[lo]) / (segEnd - cl.s[lo]) : 0;
+        const a = at(lo, lat, surf(lo, lat) + LIFT), b = at(nxt, lat, surf(nxt, lat) + LIFT);
+        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    };
+    // Which stretches of each line are painted: lists of [from, to] in metres.
+    const sample = (pred: (sM: number) => boolean): [number, number][] => {
+        const out: [number, number][] = [];
+        let open: number | null = null;
+        for (let sM = 0; sM <= L; sM += 0.5) {
+            const on = pred(Math.min(sM, L));
+            if (on && open === null) open = sM;
+            if (!on && open !== null) { out.push([open, sM]); open = null; }
+        }
+        if (open !== null) out.push([open, L]);
+        return out;
+    };
+    const dashes = (pred: (sM: number) => boolean): [number, number][] => {
+        const out: [number, number][] = [];
+        for (let a = 0; a < L; a += PERIOD) { const b = Math.min(L, a + DASH); if (pred((a + b) / 2)) out.push([a, b]); }
+        return out;
+    };
+    const lines: { lat: number; colour: 'white' | 'yellow'; spans: [number, number][] }[] = [];
+    if (plan.edges) {
+        const e = half - 0.2 - LINE / 2;
+        lines.push({ lat: -e, colour: 'white', spans: [[0, L]] }, { lat: e, colour: 'white', spans: [[0, L]] });
+    }
+    const off = (GAP + LINE) / 2;
+    const isDouble = (st: CentreStyle) => st === 'double-solid' || st === 'passing-forward' || st === 'passing-back';
+    // Left line of the pair faces oncoming traffic; the right line is on the driver's own (right-hand) side.
+    lines.push({ lat: -off, colour: 'yellow', spans: [...sample((s) => isDouble(styleAt(s)) && styleAt(s) !== 'passing-back'), ...dashes((s) => styleAt(s) === 'passing-back')] });
+    lines.push({ lat: off, colour: 'yellow', spans: [...sample((s) => isDouble(styleAt(s)) && styleAt(s) !== 'passing-forward'), ...dashes((s) => styleAt(s) === 'passing-forward')] });
+    lines.push({ lat: 0, colour: 'yellow', spans: dashes((s) => styleAt(s) === 'dashed') });
+
+    const parts: Record<'white' | 'yellow', MeshPart[]> = { white: [], yellow: [] };
+    const part = (colour: 'white' | 'yellow') => {
+        const list = parts[colour], c = list[list.length - 1];
+        if (c && c.positions.length / 3 < MAX_VERTS - 4) return c;
+        const p: MeshPart = { name: `PAINT_${colour.toUpperCase()}_${list.length}`, material: `paint_${colour}`, positions: [], normals: [], uvs: [], tangents: [], indices: [], castShadows: false };
+        list.push(p);
+        return p;
+    };
+    for (const ln of lines) for (const [s0, s1] of ln.spans) {
+        const steps = Math.max(1, Math.ceil((s1 - s0) / STEP));
+        for (let k = 0; k < steps; k++) {
+            const a = s0 + ((s1 - s0) * k) / steps, b = s0 + ((s1 - s0) * (k + 1)) / steps;
+            const p = part(ln.colour), base = p.positions.length / 3;
+            const corners: [number, number][] = [[a, ln.lat - LINE / 2], [a, ln.lat + LINE / 2], [b, ln.lat + LINE / 2], [b, ln.lat - LINE / 2]];
+            const pts = corners.map(([sM, lat]) => spot(sM, lat));
+            const t = norm(sub(pts[3], pts[0]));
+            corners.forEach(([sM, lat], q) => { p.positions.push(...pts[q]); p.normals.push(0, 1, 0); p.uvs.push(0.5 + lat / MACRO_M.paint, sM / MACRO_M.paint); p.tangents.push(t[2], 0, -t[0]); });
+            const ny = cross(sub(pts[1], pts[0]), sub(pts[2], pts[0]))[1];
+            if (ny > 0) p.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+            else p.indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+        }
+    }
+    return [...parts.white, ...parts.yellow].filter((p) => p.indices.length);
 }

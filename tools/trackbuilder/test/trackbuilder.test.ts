@@ -68,14 +68,18 @@ test('full build: KN5 round-trips, meshes are valid, AI and zip are complete', (
     const k = readKn5(res.files['test_hill_rd/test_hill_rd.kn5']);
     assert.equal(k.magic, 'sc6969');
     assert.equal(k.consumed, k.total, 'reader consumed the whole file');
-    assert.deepEqual(k.textures.map((t) => t.name), ['asphalt.png', 'grass.png', 'wall.png']);
-    assert.ok(k.materials.every((m) => m.shader === 'ksPerPixel' && m.textures.length === 1));
+    const texNames = new Set(k.textures.map((t) => t.name));
+    assert.ok(k.textures.every((t) => t.name.endsWith('.dds')), 'every texture is DDS');
+    for (const m of k.materials) for (const t of m.textures) assert.ok(texNames.has(t), `${m.name} uses missing ${t}`);
+    const road = k.materials.find((m) => m.shader === 'ksPerPixelMultiMap_NMDetail');
+    assert.ok(road, 'ground materials use the macro + detail shader');
+    assert.ok(['road', 'shoulder', 'verge', 'terrain', 'paint_white', 'paint_yellow', 'wall'].every((n) => res.materials.some((m) => m.name === n)));
     const names: string[] = [];
     walk(k.root, (n) => {
         names.push(n.name);
         if (n.type === 2) { assert.equal(n.badNumbers, 0); assert.ok(n.maxIndex! < n.vertexCount!); assert.ok(n.materialId! < k.materials.length); }
     });
-    for (const want of ['1ROAD_0', '1GRASS_L_0', '1GRASS_R_0', '1WALL_L', 'AC_START_0', 'AC_PIT_0', 'AC_HOTLAP_START_0', 'AC_TIME_0_L', 'AC_TIME_0_R', 'AC_TIME_1_L', 'AC_TIME_1_R', 'AC_AB_START_L', 'AC_AB_START_R', 'AC_AB_FINISH_L', 'AC_AB_FINISH_R']) assert.ok(names.includes(want), `missing ${want}`);
+    for (const want of ['1ROAD_0', '1GRASS_L_0', '1GRASS_R_0', '1GRAVEL_L_0', '1GRAVEL_R_0', 'PAINT_WHITE_0', 'PAINT_YELLOW_0', '1WALL_L', 'AC_START_0', 'AC_PIT_0', 'AC_HOTLAP_START_0', 'AC_TIME_0_L', 'AC_TIME_0_R', 'AC_TIME_1_L', 'AC_TIME_1_R', 'AC_AB_START_L', 'AC_AB_START_R', 'AC_AB_FINISH_L', 'AC_AB_FINISH_R']) assert.ok(names.includes(want), `missing ${want}`);
     const n = res.centerline.points.length;
     assert.equal(res.files['test_hill_rd/ai/fast_lane.ai'], undefined); // AI spline off until verified in game
     void n;
@@ -149,7 +153,7 @@ test('verges from neighbouring sections never overlap', () => {
     // loop that is far along the track (allowing 1 m slack).
     let bad = 0;
     for (const part of res.geometry.parts.filter((p) => p.name.startsWith('1GRASS'))) {
-        const cols = 6, rows = part.positions.length / 3 / cols;
+        const cols = 5, rows = part.positions.length / 3 / cols;
         for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
             const v = (r * cols + c) * 3, x = part.positions[v], z = part.positions[v + 2];
             let best = Infinity, bestI = 0;
@@ -163,7 +167,7 @@ test('verges from neighbouring sections never overlap', () => {
     assert.equal(bad, 0);
     // And the clipping actually happened: the straights 30 m apart can't both keep a 25 m verge.
     const outer = res.geometry.parts.filter((p) => p.name.startsWith('1GRASS_R')).flatMap((part) => {
-        const cols = 6, rows = part.positions.length / 3 / cols, out: number[] = [];
+        const cols = 5, rows = part.positions.length / 3 / cols, out: number[] = [];
         for (let r = 0; r < rows; r++) {
             const a = (r * cols) * 3, b = (r * cols + cols - 1) * 3;
             out.push(Math.hypot(part.positions[b] - part.positions[a], part.positions[b + 2] - part.positions[a + 2]));
@@ -206,7 +210,7 @@ test('scenery: rails, trees, signs and banners go into the KN5 and stay off the 
     assert.equal(res.elements.textures.filter((t) => t.name.startsWith('sign_')).length, 3);
     const k = readKn5(res.files['scenery_rd/scenery_rd.kn5']);
     assert.equal(k.consumed, k.total);
-    assert.ok(k.textures.some((t) => t.name === 'el_steel.png') && k.textures.some((t) => t.name === 'sign_2.png'));
+    assert.ok(k.textures.some((t) => t.name === 'el_steel.dds') && k.textures.some((t) => t.name === 'sign_2.dds'));
     const nodes: ReadNode[] = [];
     walk(k.root, (n) => nodes.push(n));
     assert.equal(nodes.find((n) => n.name === '1WALL_GR_0')!.visible, false, 'rail collision is invisible');
@@ -239,7 +243,7 @@ test('scenery on a circuit wraps across the start/finish line', () => {
 
 test('terrain surrounds the track and stays below it', () => {
     const res = buildTrack({ name: 'Terrain', polyline: windingRoad(), heightSampler: slopedTerrain, width: 6.5 });
-    assert.ok(res.terrain.length >= 1 && res.terrain.every((p) => p.name.startsWith('TERRAIN_') && p.material === 'grass'));
+    assert.ok(res.terrain.length >= 1 && res.terrain.every((p) => p.name.startsWith('TERRAIN_') && p.material === 'terrain'));
     const k = readKn5(res.files['terrain/terrain.kn5']);
     assert.equal(k.consumed, k.total);
     const cl = res.centerline;
@@ -252,4 +256,31 @@ test('terrain surrounds the track and stays below it', () => {
     }
     assert.ok(near > 0);
     assert.equal(above, 0, 'terrain vertices above the road near it');
+});
+
+test('road markings: double yellow, edge lines, and a passing zone with 3 m dashes', () => {
+    const area = (parts: { positions: number[]; indices: number[] }[]) => {
+        let a = 0;
+        for (const p of parts) for (let i = 0; i < p.indices.length; i += 3) {
+            const P = (k: number) => [p.positions[p.indices[i + k] * 3], p.positions[p.indices[i + k] * 3 + 2]];
+            const [A, B, C] = [P(0), P(1), P(2)];
+            a += Math.abs((B[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (B[1] - A[1])) / 2;
+        }
+        return a;
+    };
+    const plain = buildTrack({ name: 'Lines', polyline: windingRoad(), heightSampler: slopedTerrain, width: 6.5, terrain: false });
+    const L = plain.centerline.length;
+    const yellow = (r: typeof plain) => r.geometry.parts.filter((p) => p.name.startsWith('PAINT_YELLOW'));
+    const white = (r: typeof plain) => r.geometry.parts.filter((p) => p.name.startsWith('PAINT_WHITE'));
+    assert.ok(Math.abs(area(yellow(plain)) - 2 * 0.1 * L) / (0.2 * L) < 0.05, 'two solid yellow lines');
+    assert.ok(Math.abs(area(white(plain)) - 2 * 0.1 * L) / (0.2 * L) < 0.05, 'two white edge lines');
+    const pass = buildTrack({ name: 'Lines', polyline: windingRoad(), heightSampler: slopedTerrain, width: 6.5, terrain: false,
+        markings: { centre: 'double-solid', edges: true, overrides: [{ from: 200, to: 500, centre: 'passing-forward' }] } });
+    // Over 300 m the right line is dashed: 3.05 m of every 12.2 m.
+    const expect = 2 * 0.1 * L - 0.1 * 300 * (1 - 3.05 / 12.2);
+    assert.ok(Math.abs(area(yellow(pass)) - expect) / expect < 0.05, `passing zone area ${area(yellow(pass)).toFixed(1)} vs ${expect.toFixed(1)}`);
+    // Paint sits just above the asphalt and never carries physics.
+    assert.ok(pass.geometry.parts.filter((p) => p.name.startsWith('PAINT')).every((p) => !/^\d/.test(p.name)));
+    const circ = buildTrack({ name: 'C', polyline: kartCircuit(), heightSampler: flatLot, width: 8, circuit: true, terrain: false });
+    assert.equal(yellow(circ).length, 0, 'no centre line on a circuit');
 });

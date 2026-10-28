@@ -2,7 +2,11 @@
 
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Flag, Loader2, Mountain, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Flag, Layers, Loader2, Mountain, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { useAuth } from '../../../contexts/AuthContext';
+import { importLibrary, loadManifest } from './materialLibrary';
+import type { LibraryManifest } from './materialLibrary';
+import { LIBRARY_CATALOG } from '../../../tools/trackbuilder/materials.ts';
 import { deleteProject, explainFirestoreError, listProjects } from './trackProjects';
 import type { TrackProject } from './trackProjects';
 
@@ -33,6 +37,7 @@ const TrackLibrary: React.FC = () => {
                 <Link to="/admin/track-builder?new=circuit" className="px-4 py-3 rounded-lg bg-white/10 hover:bg-white/20 font-bold uppercase tracking-wider text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> New circuit</Link>
             </div>
             {error && <p className="mb-4 text-sm text-[#ff6b6b]">{error}</p>}
+            <MaterialLibraryCard />
             {items === null ? (
                 <div className="text-white/50 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading saved tracks…</div>
             ) : items.length === 0 ? (
@@ -67,3 +72,46 @@ const TrackLibrary: React.FC = () => {
 };
 
 export default TrackLibrary;
+
+/** Status of the photo-scanned material library, with a one-time import from Poly Haven (CC0). */
+const MaterialLibraryCard: React.FC = () => {
+    const { currentUser } = useAuth();
+    const [manifest, setManifest] = useState<LibraryManifest | null | undefined>(undefined);
+    const [busy, setBusy] = useState(false);
+    const [log, setLog] = useState<string[]>([]);
+    const [err, setErr] = useState<string | null>(null);
+    useEffect(() => { loadManifest().then(setManifest).catch((e) => { setManifest(null); setErr(explainFirestoreError(e)); }); }, []);
+    const run = async () => {
+        setBusy(true); setErr(null); setLog([]);
+        try { setManifest(await importLibrary(currentUser?.email, (m) => setLog((l) => [...l, m]))); }
+        catch (e) { setErr(explainFirestoreError(e).replace('Firestore', 'Firebase Storage').replace('trackProjects rule', 'trackbuilder storage rule')); }
+        finally { setBusy(false); }
+    };
+    const count = Object.keys(LIBRARY_CATALOG).length;
+    return (
+        <div className="mb-8 bg-[#141414] border border-white/10 rounded-xl p-5">
+            <div className="flex flex-wrap items-start gap-3">
+                <Layers className="w-5 h-5 text-[#F5B700] mt-0.5" />
+                <div className="flex-1 min-w-[16rem]">
+                    <div className="font-bold">Photo-scanned materials</div>
+                    <p className="text-sm text-white/50 mt-1">
+                        {manifest === undefined ? 'Checking…'
+                            : manifest ? `${Object.keys(manifest.entries).length} of ${count} materials imported ${new Date(manifest.created).toLocaleDateString()}${manifest.createdBy ? ` by ${manifest.createdBy}` : ''}. Every build uses them.`
+                            : `Not imported yet. Tracks build with simple generated textures until you import the ${count} photo-scanned materials (about 2 minutes, once).`}
+                    </p>
+                    {manifest && (
+                        <p className="text-xs text-white/30 mt-2">
+                            {Object.values(manifest.entries).map((e) => e && <span key={e.role} className="mr-2"><a className="underline hover:text-white/60" href={e.source.url} target="_blank" rel="noreferrer">{e.label}</a>{e.source.author ? ` (${e.source.author})` : ''}</span>)}
+                            · CC0 from Poly Haven
+                        </p>
+                    )}
+                </div>
+                <button type="button" disabled={busy} onClick={run} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-40 text-sm flex items-center gap-2">
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} {manifest ? 'Re-import' : 'Import materials'}
+                </button>
+            </div>
+            {log.length > 0 && <div className="mt-3 bg-black/40 rounded-lg p-3 text-[11px] font-mono text-white/50 max-h-40 overflow-auto">{log.map((l, i) => <div key={i}>{l}</div>)}</div>}
+            {err && <p className="mt-3 text-sm text-[#ff6b6b]">{err}</p>}
+        </div>
+    );
+};

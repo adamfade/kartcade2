@@ -4,6 +4,7 @@
 
 import type { Centerline } from './route.ts';
 import type { MeshPart, TrackGeometry, V3 } from './mesh.ts';
+import { MACRO_M } from './mesh.ts';
 
 export interface TerrainOptions {
     /** Ground height at a local point (x east, y north), or null. */
@@ -62,14 +63,14 @@ export function buildTerrain(cl: Centerline, g: TrackGeometry, opts: TerrainOpti
     const perBand = Math.max(2, Math.floor(MAX_PART_VERTS / cols));
     for (let r0 = 0, k = 0; r0 < rows - 1; r0 += perBand - 1, k++) {
         const r1 = Math.min(rows, r0 + perBand);
-        const p: MeshPart = { name: `TERRAIN_${k}`, material: 'grass', positions: [], normals: [], uvs: [], tangents: [], indices: [], castShadows: false };
+        const p: MeshPart = { name: `TERRAIN_${k}`, material: 'terrain', positions: [], normals: [], uvs: [], tangents: [], indices: [], castShadows: false };
         for (let r = r0; r < r1; r++) for (let c = 0; c < cols; c++) {
             const x = x0 + c * spacing, z = z0 + r * spacing, y = H[r * cols + c];
             const hx = (H[r * cols + Math.min(cols - 1, c + 1)] - H[r * cols + Math.max(0, c - 1)]) / (2 * spacing);
             const hz = (H[Math.min(rows - 1, r + 1) * cols + c] - H[Math.max(0, r - 1) * cols + c]) / (2 * spacing);
             const nl = Math.hypot(hx, 1, hz);
             p.positions.push(x, y, z); p.normals.push(-hx / nl, 1 / nl, -hz / nl);
-            p.uvs.push(x / 10, z / 10); p.tangents.push(1, 0, 0);
+            p.uvs.push(x / MACRO_M.terrain, z / MACRO_M.terrain); p.tangents.push(1, 0, 0);
         }
         const id = (r: number, c: number) => (r - r0) * cols + c;
         const pos = (v: number): V3 => [p.positions[v * 3], p.positions[v * 3 + 1], p.positions[v * 3 + 2]];

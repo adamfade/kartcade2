@@ -10,3 +10,5 @@ export * from './fetchers.ts';
 export * from './trace.ts';
 export * from './elements.ts';
 export * from './terrain.ts';
+export * from './dds.ts';
+export * from './materials.ts';

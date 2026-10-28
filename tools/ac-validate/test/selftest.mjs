@@ -35,7 +35,11 @@ function quad(half, y) {
 
 function baseSpec() {
   const road = ring(95, 105, 0, 64);
-  const dds = Buffer.concat([Buffer.from('DDS ', 'latin1'), Buffer.alloc(124)]);
+  // Minimal valid DDS: 4x4 DXT1, one level (128-byte header + one 8-byte block).
+  const dds = Buffer.alloc(136);
+  dds.write('DDS ', 0, 'latin1'); dds.writeUInt32LE(124, 4); dds.writeUInt32LE(0x81007, 8);
+  dds.writeUInt32LE(4, 12); dds.writeUInt32LE(4, 16); dds.writeUInt32LE(8, 20); dds.writeUInt32LE(1, 28);
+  dds.writeUInt32LE(32, 76); dds.writeUInt32LE(4, 80); dds.write('DXT1', 84, 'latin1'); dds.writeUInt32LE(0x1000, 108);
   const mat = (name, tex) => ({
     name, shader: 'ksPerPixel',
     props: ['ksAmbient', 'ksDiffuse', 'ksSpecular', 'ksSpecularEXP', 'ksEmissive', 'ksAlphaRef'].map((n) => ({ name: n, a: 0.5 })),
@@ -154,6 +158,7 @@ const cases = [
   { name: 'AI length not monotonic', expect: 'fail', grep: /length decreases/, mod: (s) => { s.ai[120].length = 1; } },
   { name: 'AI file truncated', expect: 'fail', grep: /parse error|does not fit|truncated/, mod: (s) => { const b = writeAi(s.ai); s.aiBuf = b.subarray(0, b.length - 1000); } },
   { name: 'AI file missing has-grid flag', expect: 'fail', grep: /has-grid flag is missing/, mod: (s) => { s.aiBuf = writeAi(s.ai, { gridFlag: false }); } },
+  { name: 'truncated DDS texture', expect: 'fail', grep: /need 136/, mod: (s) => { s.kn5.textures[0] = { name: 'road.dds', data: s.kn5.textures[0].data.subarray(0, 130) }; } },
   { name: 'missing map.png', expect: 'fail', grep: /map\.png missing/, mod: (s) => { s.extra['map.png'] = null; } },
   { name: 'no kn5 at all', expect: 'fail', grep: /no test_ring\.kn5/, mod: (s) => { s.extra[`${ID}.kn5`] = null; } },
   { name: 'missing fast_lane.ai warns only', expect: 'warn', grep: /fast_lane\.ai missing/, mod: (s) => { s.extra['ai/fast_lane.ai'] = null; } },

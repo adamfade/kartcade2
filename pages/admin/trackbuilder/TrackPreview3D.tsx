@@ -12,11 +12,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { Car, ChevronLeft, ChevronRight, Eye, Globe2, Pause } from 'lucide-react';
+import { Car, ChevronLeft, ChevronRight, Eye, Globe2, MapPinned, Pause } from 'lucide-react';
 import type { BuildResult } from '../../../tools/trackbuilder/pack.ts';
 import type { ElementBuild } from '../../../tools/trackbuilder/elements.ts';
 import type { MeshPart } from '../../../tools/trackbuilder/mesh.ts';
 import type { Kn5Material, Kn5Texture } from '../../../tools/trackbuilder/kn5.ts';
+import { decodeDds } from '../../../tools/trackbuilder/dds.ts';
 
 export interface TrackPick { s: number; lateral: number; index: number }
 
@@ -38,43 +39,113 @@ type Mode = 'orbit' | 'ground';
 const EYE = 1.15;
 const DRIVE_SPEED = 22; // m/s, about 80 km/h
 
+/**
+ * KN5 texture -> three.js texture. DDS is decoded on the CPU (works on every GPU) and mipmapped by WebGL.
+ * Rows are kept top-first (flipY false) and the mesh v is negated exactly as the KN5 writer does, so the
+ * preview maps textures the way Assetto Corsa does.
+ */
 function textureFrom(t: Kn5Texture, renderer: THREE.WebGLRenderer): THREE.Texture {
-    const url = URL.createObjectURL(new Blob([t.data], { type: 'image/png' }));
-    const tex = new THREE.Texture();
-    const img = new Image();
-    img.onload = () => { tex.image = img; tex.needsUpdate = true; URL.revokeObjectURL(url); };
-    img.src = url;
+    let tex: THREE.Texture;
+    if (t.name.toLowerCase().endsWith('.dds')) {
+        const d = decodeDds(t.data);
+        tex = new THREE.DataTexture(d.rgba, d.width, d.height, THREE.RGBAFormat);
+        tex.flipY = false;
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+    } else {
+        const url = URL.createObjectURL(new Blob([t.data], { type: 'image/png' }));
+        tex = new THREE.Texture();
+        tex.flipY = false;
+        const img = new Image();
+        img.onload = () => { tex.image = img; tex.needsUpdate = true; URL.revokeObjectURL(url); };
+        img.src = url;
+    }
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
     return tex;
 }
 
+/**
+ * ksPerPixelMultiMap_NMDetail as AC blends it: colour = macro.rgb * lerp(detail.rgb, 1, macro.a), lit in
+ * gamma space (AC doesn't linearise textures), plus the scene fog.
+ */
+function macroDetailMaterial(macro: THREE.Texture | undefined, detail: THREE.Texture | undefined, detailMult: number, lights: Lights): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+        fog: true,
+        side: THREE.DoubleSide,
+        uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+            macro: { value: macro ?? null }, detail: { value: detail ?? null }, detailMult: { value: detailMult },
+            sunDir: { value: lights.sunDir }, sunCol: { value: lights.sunCol }, skyCol: { value: lights.skyCol }, groundCol: { value: lights.groundCol },
+        }]),
+        vertexShader: `
+            varying vec2 vUv; varying vec3 vN;
+            #include <fog_pars_vertex>
+            void main() {
+                vUv = uv; vN = normalize(normal);
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                #include <fog_vertex>
+            }`,
+        fragmentShader: `
+            uniform sampler2D macro; uniform sampler2D detail; uniform float detailMult;
+            uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyCol; uniform vec3 groundCol;
+            varying vec2 vUv; varying vec3 vN;
+            #include <fog_pars_fragment>
+            void main() {
+                vec4 m = texture2D(macro, vUv);
+                vec3 d = texture2D(detail, vUv * detailMult).rgb;
+                vec3 col = m.rgb * mix(d, vec3(1.0), m.a);
+                vec3 n = normalize(vN);
+                vec3 light = mix(groundCol, skyCol, n.y * 0.5 + 0.5) + sunCol * max(dot(n, sunDir), 0.0);
+                gl_FragColor = vec4(col * light, 1.0);
+                #include <fog_fragment>
+            }`,
+    });
+}
+
+interface Lights { sunDir: THREE.Vector3; sunCol: THREE.Color; skyCol: THREE.Color; groundCol: THREE.Color }
+const LIGHTS: Lights = {
+    sunDir: new THREE.Vector3(-0.5, 1, -0.35).normalize(),
+    sunCol: new THREE.Color(0.62, 0.58, 0.52), skyCol: new THREE.Color(0.52, 0.56, 0.62), groundCol: new THREE.Color(0.3, 0.3, 0.28),
+};
+
 /** One group of three.js meshes for a set of KN5 parts, with its own textures (disposed together). */
 function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Texture[], renderer: THREE.WebGLRenderer) {
     const group = new THREE.Group();
-    const texByName = new Map(textures.map((t) => [t.name, textureFrom(t, renderer)]));
+    const used = new Set(materials.filter((m) => parts.some((p) => p.material === m.name)).flatMap((m) => m.textures.map((t) => t.texture)));
+    const texByName = new Map(textures.filter((t) => used.has(t.name)).map((t) => [t.name, textureFrom(t, renderer)]));
     const matByName = new Map<string, THREE.Material>();
     for (const m of materials) {
-        const map = texByName.get(m.textures[0]?.texture ?? '');
-        // Grass gets a little self-light so the dark texture still reads from the overview.
-        matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide, emissive: m.name === 'grass' ? 0x16220d : 0x000000 }));
+        const slot = (s: string) => texByName.get(m.textures.find((t) => t.sampler === s)?.texture ?? '');
+        if (m.shader === 'ksPerPixelMultiMap_NMDetail') {
+            const mult = m.properties.find((p) => p.name === 'detailUVMultiplier')?.a ?? 1;
+            matByName.set(m.name, macroDetailMaterial(slot('txDiffuse'), slot('txDetail'), mult, LIGHTS));
+        } else {
+            const map = slot('txDiffuse');
+            if (map) map.colorSpace = THREE.SRGBColorSpace;
+            matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide }));
+        }
     }
     for (const p of parts) {
         if (p.visible === false || !p.indices.length) continue;
         const g = new THREE.BufferGeometry();
-        const pos = new Float32Array(p.positions.length), nor = new Float32Array(p.normals.length);
+        const pos = new Float32Array(p.positions.length), nor = new Float32Array(p.normals.length), uv = new Float32Array(p.uvs.length);
         for (let i = 0; i < p.positions.length; i += 3) {
             pos[i] = p.positions[i]; pos[i + 1] = p.positions[i + 1]; pos[i + 2] = -p.positions[i + 2];
             nor[i] = p.normals[i]; nor[i + 1] = p.normals[i + 1]; nor[i + 2] = -p.normals[i + 2];
         }
+        for (let i = 0; i < p.uvs.length; i += 2) { uv[i] = p.uvs[i]; uv[i + 1] = -p.uvs[i + 1]; }
         g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-        g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(p.uvs), 2));
+        g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
         g.setIndex(p.indices);
         g.computeBoundingSphere();
         const mesh = new THREE.Mesh(g, matByName.get(p.material) ?? new THREE.MeshLambertMaterial({ color: 0xff00ff }));
         mesh.name = p.name;
+        // Paint sits 12 mm above the asphalt: nudge it forward in depth so it never flickers at a distance.
+        if (p.name.startsWith('PAINT_')) { (mesh.material as THREE.Material).polygonOffset = true; (mesh.material as THREE.Material).polygonOffsetFactor = -2; mesh.renderOrder = 1; }
         group.add(mesh);
     }
     const dispose = () => {
@@ -83,6 +154,22 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
         texByName.forEach((t) => t.dispose());
     };
     return { group, dispose };
+}
+
+/**
+ * Open Google Street View at distance s along the track, facing the direction of travel. Linking out with the
+ * Maps URLs API is allowed; Street View imagery itself must never be copied into a track.
+ */
+export function openStreetView(build: BuildResult, s: number) {
+    const c = build.centerline;
+    const x = c.closed ? ((s % c.length) + c.length) % c.length : Math.max(0, Math.min(c.length, s));
+    let i = 0;
+    while (i < c.points.length - 1 && c.s[i + 1] <= x) i++;
+    const ll = c.projection.toLatLon(c.points[i]);
+    const t = c.tangents[i];
+    const heading = Math.round(((Math.atan2(t.x, t.y) * 180) / Math.PI + 360) % 360);
+    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat.toFixed(6)},${ll.lon.toFixed(6)}&heading=${heading}&pitch=0&fov=80`;
+    window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPick, goTo, className }) => {
@@ -350,6 +437,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
                     <button type="button" className={btn} onClick={enterOrbit}><Globe2 className="w-3.5 h-3.5" /> Overview</button>
                     <button type="button" className={btn} onClick={() => step(-25)}><ChevronLeft className="w-3.5 h-3.5" /> 25 m</button>
                     <button type="button" className={btn} onClick={() => step(25)}>25 m <ChevronRight className="w-3.5 h-3.5" /></button>
+                    <button type="button" className={btn} title="Open Google Street View at this spot, facing the same way (reference only)" onClick={() => openStreetView(build, view.current.s)}><MapPinned className="w-3.5 h-3.5" /> Street View</button>
                     <button type="button" className={btn} onClick={() => { const d = !view.current.driving; view.current.driving = d; setDriving(d); }}>
                         {driving ? <><Pause className="w-3.5 h-3.5" /> Stop</> : <><Car className="w-3.5 h-3.5" /> Drive</>}
                     </button>

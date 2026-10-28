@@ -17,7 +17,9 @@ import type { TrackElement } from '../../../tools/trackbuilder/elements.ts';
 import { useAuth } from '../../../contexts/AuthContext';
 import { explainFirestoreError, saveProject } from './trackProjects';
 import type { TrackProject } from './trackProjects';
-import TrackPreview3D from './TrackPreview3D';
+import TrackPreview3D, { openStreetView } from './TrackPreview3D';
+import { LIBRARY_ROLES_FOR_BUILD, loadLibrary } from './materialLibrary';
+import type { MaterialLibrary } from '../../../tools/trackbuilder/materials.ts';
 import type { TrackPick } from './TrackPreview3D';
 import SceneryPanel from './SceneryPanel';
 import type { Tool, ToolOptions } from './SceneryPanel';
@@ -103,7 +105,15 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const sampler = useRef<{ key: string; fn: HeightSampler } | null>(null);
     const [tool, setToolRaw] = useState<Tool | null>(null);
     const [pendingFrom, setPendingFrom] = useState<number | null>(null);
-    const [toolOpts, setToolOpts] = useState<ToolOptions>({ side: 'both', density: 6, signStyle: 'kartcade', signText: '', bannerText: 'START' });
+    const [toolOpts, setToolOpts] = useState<ToolOptions>({ side: 'both', density: 6, signStyle: 'kartcade', signText: '', bannerText: 'START', centre: 'passing-forward' });
+    // Photo-scanned material library (Firebase Storage). Builds fall back to procedural textures without it.
+    const library = useRef<MaterialLibrary | null>(null);
+    const [libStatus, setLibStatus] = useState('Loading materials…');
+    useEffect(() => {
+        loadLibrary(LIBRARY_ROLES_FOR_BUILD)
+            .then((lib) => { library.current = lib; const n = Object.keys(lib).length; setLibStatus(n ? `Photo-scanned materials (${n} loaded)` : 'Procedural materials (import the photo library from the track list)'); })
+            .catch((e) => { library.current = {}; setLibStatus(`Procedural materials (library unavailable: ${(e as Error).message})`); });
+    }, []);
     const [goTo, setGoTo] = useState<{ s: number; nonce: number } | null>(null);
 
     const pins = useMemo(() => (start && end ? [start, ...vias, end] : null), [start, vias, end]);
@@ -249,7 +259,10 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const buildWith = (polyline: LatLon[], fn: HeightSampler, withElements: boolean) => buildTrack({
         name: name.trim() || 'Track', polyline, heightSampler: fn, width: widthM(), walls,
         flipStart: flip, circuit: kind === 'circuit', reverse, gridSlots: parseInt(gridSlots, 10) || 12,
-        city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements: withElements ? elements : [], log: (m) => setLog((l) => [...l, m]),
+        city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements: withElements ? elements : elements.filter((e) => e.type === 'lines'),
+        library: library.current ?? undefined, log: (m) => setLog((l) => [...l, m]),
+        // The preview needs geometry and materials only; the download packs the full track.
+        output: withElements ? 'full' : 'geometry',
     });
 
     const buildPreview = async () => {
@@ -262,7 +275,9 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     };
 
     // Rebuild the base when options that change its shape change (keeps the preview honest).
-    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}`;
+    // Centre-line stretches change the road markings, which are part of the base geometry.
+    const linesKey = JSON.stringify(elements.filter((e) => e.type === 'lines'));
+    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}`;
     const lastOpts = useRef(optsKey);
     useEffect(() => {
         if (lastOpts.current === optsKey) return;
@@ -274,7 +289,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     // Open a saved project with a built line straight into the preview.
     useEffect(() => { if (initial.line) buildPreview(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-    const scenery = useMemo(() => (base ? buildElements(base.centerline, base.geometry, elements) : null), [base, elements]);
+    const scenery = useMemo(() => (base ? buildElements(base.centerline, base.geometry, elements.filter((e) => e.type !== 'lines')) : null), [base, elements]);
 
     const download = async () => {
         setBusy('download'); setLog([]); setError(null);
@@ -308,13 +323,14 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const onPick = (p: TrackPick) => {
         if (!tool || !base) return;
         const id = elementId();
-        if (tool === 'guardrail' || tool === 'trees') {
+        if (tool === 'guardrail' || tool === 'trees' || tool === 'lines') {
             if (pendingFrom == null) { setPendingFrom(p.s); return; }
             let from = pendingFrom, to = p.s;
             if (!base.centerline.closed && to < from) [from, to] = [to, from];
             if (Math.abs(to - from) < 2) { setPendingFrom(null); return; }
             setElements([...elements, tool === 'guardrail'
                 ? { id, type: 'guardrail', from, to, side: toolOpts.side }
+                : tool === 'lines' ? { id, type: 'lines', from, to, centre: toolOpts.centre }
                 : { id, type: 'trees', from, to, side: toolOpts.side, density: toolOpts.density }]);
             setPendingFrom(null);
         } else if (tool === 'tree') setElements([...elements, { id, type: 'tree', at: p.s, offset: p.lateral === 0 ? 8 : p.lateral }]);
@@ -427,6 +443,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                     <button type="button" disabled={!canBuild || !!busy} onClick={buildPreview} className="w-full py-3 rounded-lg bg-[#D42428] hover:bg-[#b91c1c] disabled:opacity-40 font-bold uppercase tracking-wider flex items-center justify-center gap-2">
                         {busy === 'preview' ? <><Loader2 className="w-4 h-4 animate-spin" /> Building…</> : <><Box className="w-4 h-4" /> {base ? 'Rebuild 3D preview' : 'Build 3D preview'}</>}
                     </button>
+                    <p className="text-[11px] text-white/40">{libStatus}</p>
                     {log.length > 0 && <div className="bg-black/40 rounded-lg p-3 text-[11px] font-mono text-white/50 max-h-32 overflow-auto">{log.map((l, i) => <div key={i}>{l}</div>)}</div>}
                     {base && (
                         <dl className="grid grid-cols-2 gap-2 text-sm">
@@ -445,6 +462,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                     <TrackPreview3D build={base} scenery={scenery} picking={!!tool} marker={pendingFrom} onPick={onPick} goTo={goTo} className="h-[600px] rounded-xl overflow-hidden border border-white/10 bg-black" />
                     <SceneryPanel tool={tool} setTool={setTool} options={toolOpts} setOptions={setToolOpts} pendingFrom={pendingFrom}
                         elements={elements} setElements={setElements} lengthM={base.centerline.length} circuit={base.centerline.closed}
+                        onStreetView={(s) => openStreetView(base, s)}
                         onView={(s) => setGoTo({ s: base.centerline.closed ? s - 30 : Math.max(0, s - 30), nonce: Date.now() })} onQuick={onQuick} />
                 </div>
             )}

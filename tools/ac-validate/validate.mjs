@@ -277,7 +277,22 @@ function checkKn5(R, file, buf, verbose) {
     if (!t.name) R.warn(`texture #${t.index} has an empty name`);
     if (t.size === 0) R.warn(`texture "${t.name}" has 0 bytes of data`);
     else if (t.kind === 'unknown') R.warn(`texture "${t.name}" data is not DDS/PNG/JPG (first bytes do not match)`);
+    if (t.dds) {
+      const d = t.dds;
+      const pow2 = (v) => v > 0 && (v & (v - 1)) === 0;
+      if (d.error) R.fail(`texture "${t.name}": ${d.error}`);
+      else {
+        if (!d.fourCC && !d.rgbBits) R.warn(`texture "${t.name}": DDS pixel format not recognised`);
+        else if (d.fourCC && d.need == null) R.warn(`texture "${t.name}": DDS format ${d.fourCC} not checked`);
+        if (d.need != null && d.size < d.need) R.fail(`texture "${t.name}": DDS is ${d.size} bytes but its ${d.mipCount} mip level(s) need ${d.need}`);
+        if (!pow2(d.width) || !pow2(d.height)) R.warn(`texture "${t.name}": ${d.width}x${d.height} is not a power of two`);
+        if (d.mipCount > 1 && d.mipCount !== d.fullChain) R.warn(`texture "${t.name}": ${d.mipCount} mip levels, a full chain is ${d.fullChain}`);
+        if (d.mipCount === 1 && Math.max(d.width, d.height) > 64) R.info(`texture "${t.name}": no mipmaps (may shimmer at a distance)`);
+      }
+    } else if (t.kind === 'png' && t.size > 64 * 1024) R.info(`texture "${t.name}" is a PNG (no mipmaps; may shimmer at a distance)`);
   }
+  const ddsCount = k.textures.filter((t) => t.dds && !t.dds.error).length;
+  if (ddsCount) R.pass(`${ddsCount} DDS texture(s) with valid headers and sizes`);
   R.info(`${k.textures.length} texture(s): ${k.textures.slice(0, 20).map((t) => `${t.name} [${t.kind}, ${t.size} B]`).join(', ')}${k.textures.length > 20 ? ', ...' : ''}`);
 
   // Materials

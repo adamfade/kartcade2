@@ -69,12 +69,13 @@ export function parseKn5(buf) {
     const size = r.u32();
     r.need(size, `texture "${name}" data`);
     const head = buf.subarray(r.o, r.o + Math.min(8, size));
+    const body = buf.subarray(r.o, r.o + size);
     r.o += size;
     let kind = 'unknown';
     if (head.length >= 4 && head.toString('latin1', 0, 4) === 'DDS ') kind = 'dds';
     else if (head.length >= 8 && head[0] === 0x89 && head.toString('latin1', 1, 4) === 'PNG') kind = 'png';
     else if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8) kind = 'jpg';
-    textures.push({ index: i, name, active, size, kind, offset: at });
+    textures.push({ index: i, name, active, size, kind, offset: at, dds: kind === 'dds' ? ddsInfo(body) : null });
   }
 
   // Materials
@@ -245,4 +246,28 @@ export function bbox(positions) {
     }
   }
   return { min, max, empty: min[0] === Infinity };
+}
+
+/**
+ * DDS header (Microsoft DDS_HEADER, 124 bytes after the magic): dimensions, mip count, pixel format, and the
+ * bytes the mip chain needs for block-compressed formats. Written from the DDS spec, not the builder.
+ */
+export function ddsInfo(b) {
+  if (b.length < 128) return { error: `only ${b.length} bytes, shorter than a DDS header` };
+  const u32 = (o) => b.readUInt32LE(o);
+  const height = u32(12), width = u32(16), mipCount = Math.max(1, u32(28));
+  const pfFlags = u32(80);
+  const fourCC = pfFlags & 0x4 ? b.toString('latin1', 84, 88) : null;
+  const rgbBits = pfFlags & 0x40 ? u32(88) : null;
+  const blockBytes = { DXT1: 8, DXT3: 16, DXT5: 16, ATI1: 8, ATI2: 16, BC4U: 8, BC5U: 16 }[fourCC] ?? null;
+  let need = null;
+  if (blockBytes) {
+    need = 128; let w = width, h = height;
+    for (let m = 0; m < mipCount; m++) { need += Math.max(1, Math.ceil(w / 4)) * Math.max(1, Math.ceil(h / 4)) * blockBytes; w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
+  } else if (rgbBits) {
+    need = 128; let w = width, h = height;
+    for (let m = 0; m < mipCount; m++) { need += w * h * (rgbBits / 8); w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
+  }
+  const fullChain = Math.floor(Math.log2(Math.max(width, height, 1))) + 1;
+  return { width, height, mipCount, fullChain, fourCC, rgbBits, need, size: b.length };
 }

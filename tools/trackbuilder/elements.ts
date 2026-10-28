@@ -3,11 +3,13 @@
 // rebuilds with its scenery in the same places. Geometry is in AC space like mesh.ts: X east, Y up, Z north.
 
 import type { Centerline } from './route.ts';
-import type { MeshPart, TrackGeometry, V3 } from './mesh.ts';
+import type { CentreStyle, MeshPart, TrackGeometry, V3 } from './mesh.ts';
 import { ksMaterial } from './kn5.ts';
 import type { Kn5Material, Kn5Texture } from './kn5.ts';
 import { bannerTexture, barkTexture, needlesTexture, signText, signTexture, solidTexture, steelTexture } from './textures.ts';
 import type { SignStyle } from './textures.ts';
+import { encodeDds } from './dds.ts';
+import { decodePNG } from './png.ts';
 
 export type ElementSide = 'left' | 'right' | 'both';
 export type { SignStyle };
@@ -17,10 +19,12 @@ export type TrackElement =
     | { id: string; type: 'trees'; from: number; to: number; side: ElementSide; density?: number }
     | { id: string; type: 'tree'; at: number; offset: number }
     | { id: string; type: 'sign'; at: number; side: 'left' | 'right'; style: SignStyle; text: string }
-    | { id: string; type: 'banner'; at: number; text: string };
+    | { id: string; type: 'banner'; at: number; text: string }
+    /** A stretch with a different centre line (e.g. a passing zone). Turned into road markings, not scenery. */
+    | { id: string; type: 'lines'; from: number; to: number; centre: CentreStyle };
 
 export const ELEMENT_LABELS: Record<TrackElement['type'], string> = {
-    guardrail: 'Guard rail', trees: 'Trees', tree: 'Single tree', sign: 'Sign', banner: 'Start/finish banner',
+    guardrail: 'Guard rail', trees: 'Trees', tree: 'Single tree', sign: 'Sign', banner: 'Start/finish banner', lines: 'Centre line',
 };
 
 export interface ElementBuild { parts: MeshPart[]; textures: Kn5Texture[]; materials: Kn5Material[]; warnings: string[] }
@@ -272,10 +276,13 @@ export function buildElements(cl: Centerline, g: TrackGeometry, elements: TrackE
     const used = new Set(parts.map((p) => p.material));
     const textures: Kn5Texture[] = [];
     const materials: Kn5Material[] = [];
+    // Element textures are drawn as PNGs, then stored as DDS with mipmaps like everything else.
     const add = (mat: string, tex: string, data: () => Uint8Array, spec = 0.05) => {
         if (!used.has(mat)) return;
-        textures.push({ name: tex, data: data() });
-        materials.push(ksMaterial(mat, tex, spec));
+        const name = tex.replace(/\.png$/, '.dds');
+        const img = decodePNG(data());
+        textures.push({ name, data: encodeDds(img, { format: 'bc1' }) });
+        materials.push(ksMaterial(mat, name, spec));
     };
     add('el_steel', 'el_steel.png', () => steelTexture(), 0.4);
     add('el_post', 'el_post.png', () => solidTexture([105, 108, 112]), 0.2);

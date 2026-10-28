@@ -47,6 +47,20 @@ service firebase.storage {
         request.auth.token.email == 'info@kartcade.com'
       );
     }
-    
+
+    // ==========================================
+    // 3. TRACK BUILDER (material library + per-track site data)
+    // ==========================================
+    // CC0 photo-scanned materials and public-domain map data, processed for the track builder.
+    // Readable by anyone (builds run in the browser); written only by admins from the track builder page.
+    match /trackbuilder/{path=**} {
+      allow read: if true;
+      allow write, delete: if request.auth != null && request.auth.token.email_verified == true && (
+        request.auth.token.email == 'kartcade.website@gmail.com' ||
+        request.auth.token.email == 'adamjames9@gmail.com' ||
+        request.auth.token.email == 'info@kartcade.com'
+      ) && (request.resource == null || request.resource.size < 64 * 1024 * 1024);
+    }
+
   }
 }

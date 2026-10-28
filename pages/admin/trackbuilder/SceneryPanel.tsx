@@ -2,7 +2,8 @@
 // holds the active tool, its options, quick actions and the editable list.
 
 import React from 'react';
-import { Crosshair, Eye, Flag, Shield, Signpost, Sparkles, Trash2, TreePine, Trees, X } from 'lucide-react';
+import { Crosshair, Eye, Flag, MapPinned, Shield, Signpost, Sparkles, Trash2, TreePine, Trees, X, Equal } from 'lucide-react';
+import type { CentreStyle } from '../../../tools/trackbuilder/mesh.ts';
 import { ELEMENT_LABELS } from '../../../tools/trackbuilder/elements.ts';
 import type { ElementSide, SignStyle, TrackElement } from '../../../tools/trackbuilder/elements.ts';
 
@@ -14,6 +15,7 @@ export interface ToolOptions {
     signStyle: SignStyle;
     signText: string;
     bannerText: string;
+    centre: CentreStyle;
 }
 
 interface Props {
@@ -27,6 +29,7 @@ interface Props {
     lengthM: number;
     circuit: boolean;
     onView: (s: number) => void;
+    onStreetView: (s: number) => void;
     onQuick: (what: 'banners' | 'trees' | 'boards') => void;
 }
 
@@ -36,7 +39,16 @@ const TOOLS: { t: Tool; icon: React.ReactNode; hint: string }[] = [
     { t: 'tree', icon: <TreePine className="w-4 h-4" />, hint: 'Click beside the road where the tree goes' },
     { t: 'sign', icon: <Signpost className="w-4 h-4" />, hint: 'Click the side of the road the sign stands on' },
     { t: 'banner', icon: <Flag className="w-4 h-4" />, hint: 'Click the road where the banner spans it' },
+    { t: 'lines', icon: <Equal className="w-4 h-4" />, hint: 'Click where the centre line changes, then where it changes back' },
 ];
+
+export const CENTRE_LABELS: Record<CentreStyle, string> = {
+    'double-solid': 'Double yellow (no passing)',
+    'passing-forward': 'Passing zone (dashed on your side)',
+    'passing-back': 'Passing zone (dashed on the other side)',
+    dashed: 'Single dashed yellow',
+    none: 'No centre line',
+};
 
 const STYLE_LABELS: Record<SignStyle, string> = { kartcade: 'Kartcade', distance: 'Distance board', warning: 'Warning (yellow)', custom: 'Custom (black)' };
 
@@ -44,7 +56,7 @@ const m = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)} km` : `${Math.ro
 
 const input = 'w-full bg-black/40 border border-white/10 rounded-md px-2 py-1 text-sm focus:outline-none focus:border-[#2D9E49]';
 
-const SceneryPanel: React.FC<Props> = ({ tool, setTool, options, setOptions, pendingFrom, elements, setElements, lengthM, circuit, onView, onQuick }) => {
+const SceneryPanel: React.FC<Props> = ({ tool, setTool, options, setOptions, pendingFrom, elements, setElements, lengthM, circuit, onView, onStreetView, onQuick }) => {
     const set = (patch: Partial<ToolOptions>) => setOptions({ ...options, ...patch });
     const update = (id: string, patch: Partial<TrackElement>) => setElements(elements.map((e) => (e.id === id ? ({ ...e, ...patch } as TrackElement) : e)));
     const clampS = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.min(lengthM, v)) : 0);
@@ -54,7 +66,7 @@ const SceneryPanel: React.FC<Props> = ({ tool, setTool, options, setOptions, pen
         <div className="bg-[#141414] rounded-xl border border-white/10 p-4 space-y-4">
             <div>
                 <div className="text-sm font-bold uppercase tracking-wider mb-2">Scenery</div>
-                <div className="grid grid-cols-5 gap-1">
+                <div className="grid grid-cols-6 gap-1">
                     {TOOLS.map(({ t, icon }) => (
                         <button key={t} type="button" title={ELEMENT_LABELS[t]} onClick={() => setTool(tool === t ? null : t)}
                             className={`flex flex-col items-center gap-1 rounded-lg py-2 text-[10px] leading-tight transition-colors ${tool === t ? 'bg-[#D42428] text-white' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}>
@@ -68,9 +80,14 @@ const SceneryPanel: React.FC<Props> = ({ tool, setTool, options, setOptions, pen
                 <div className="rounded-lg border border-[#D42428]/40 bg-[#D42428]/5 p-3 space-y-2 text-sm">
                     <div className="flex items-start gap-2">
                         <Crosshair className="w-4 h-4 mt-0.5 text-[#D42428] flex-shrink-0" />
-                        <span className="flex-1">{pendingFrom != null ? `Start set at ${m(pendingFrom)}. Now click where it ends.` : active.hint}{(tool === 'guardrail' || tool === 'trees') && circuit ? ' (runs in the driving direction)' : ''}</span>
+                        <span className="flex-1">{pendingFrom != null ? `Start set at ${m(pendingFrom)}. Now click where it ends.` : active.hint}{(tool === 'guardrail' || tool === 'trees' || tool === 'lines') && circuit ? ' (runs in the driving direction)' : ''}</span>
                         <button type="button" onClick={() => setTool(null)} className="text-white/50 hover:text-white" title="Done"><X className="w-4 h-4" /></button>
                     </div>
+                    {tool === 'lines' && (
+                        <select value={options.centre} onChange={(e) => set({ centre: e.target.value as CentreStyle })} className={input}>
+                            {(Object.keys(CENTRE_LABELS) as CentreStyle[]).map((k) => <option key={k} value={k}>{CENTRE_LABELS[k]}</option>)}
+                        </select>
+                    )}
                     {(tool === 'guardrail' || tool === 'trees') && (
                         <div className="flex gap-1">
                             {(['left', 'right', 'both'] as ElementSide[]).map((sd) => (
@@ -107,6 +124,7 @@ const SceneryPanel: React.FC<Props> = ({ tool, setTool, options, setOptions, pen
                             <div className="flex items-center gap-2">
                                 <span className="font-medium flex-1">{ELEMENT_LABELS[e.type]}{e.type === 'sign' ? ` · ${STYLE_LABELS[e.style]}` : ''}</span>
                                 <button type="button" title="View from the road" onClick={() => onView('at' in e ? e.at : e.from)} className="text-white/50 hover:text-white"><Eye className="w-3.5 h-3.5" /></button>
+                                <button type="button" title="Open Google Street View here (reference)" onClick={() => onStreetView('at' in e ? e.at : e.from)} className="text-white/50 hover:text-white"><MapPinned className="w-3.5 h-3.5" /></button>
                                 <button type="button" title="Remove" onClick={() => setElements(elements.filter((x) => x.id !== e.id))} className="text-white/50 hover:text-[#ff6b6b]"><Trash2 className="w-3.5 h-3.5" /></button>
                             </div>
                             <div className="flex flex-wrap items-center gap-1 text-white/60">
@@ -114,9 +132,15 @@ const SceneryPanel: React.FC<Props> = ({ tool, setTool, options, setOptions, pen
                                     <input type="number" value={Math.round(e.from)} onChange={(ev) => update(e.id, { from: clampS(parseFloat(ev.target.value)) })} className={`${input} !w-20`} />
                                     <span>to</span>
                                     <input type="number" value={Math.round(e.to)} onChange={(ev) => update(e.id, { to: clampS(parseFloat(ev.target.value)) })} className={`${input} !w-20`} />
-                                    <select value={e.side} onChange={(ev) => update(e.id, { side: ev.target.value as ElementSide })} className={`${input} !w-20`}>
-                                        <option value="left">left</option><option value="right">right</option><option value="both">both</option>
-                                    </select>
+                                    {e.type === 'lines' ? (
+                                        <select value={e.centre} onChange={(ev) => update(e.id, { centre: ev.target.value as CentreStyle })} className={`${input} !w-full`}>
+                                            {(Object.keys(CENTRE_LABELS) as CentreStyle[]).map((k) => <option key={k} value={k}>{CENTRE_LABELS[k]}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={e.side} onChange={(ev) => update(e.id, { side: ev.target.value as ElementSide })} className={`${input} !w-20`}>
+                                            <option value="left">left</option><option value="right">right</option><option value="both">both</option>
+                                        </select>
+                                    )}
                                 </>) : (<>
                                     <span>at</span>
                                     <input type="number" value={Math.round(e.at)} onChange={(ev) => update(e.id, { at: clampS(parseFloat(ev.target.value)) })} className={`${input} !w-20`} />
