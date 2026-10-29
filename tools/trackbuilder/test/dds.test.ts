@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeDds, encodeDds, mipChain, resize } from '../dds.ts';
 import type { Rgba } from '../dds.ts';
-import { treeAtlas } from '../features.ts';
+import { billboardAtlas as treeAtlas } from '../trees.ts';
 
 function photoLike(w: number, h: number): Rgba {
     const data = new Uint8Array(w * h * 4);

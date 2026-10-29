@@ -13,7 +13,7 @@ export interface OsmLine { id: number; line: LatLon[]; tags: Record<string, stri
 /** A road with its node ids, so junctions (shared nodes) and signals on it can be found. */
 export interface OsmWay { id: number; nodes: number[]; line: LatLon[]; tags: Record<string, string> }
 
-export const OSM_VERSION = 2;
+export const OSM_VERSION = 3;
 /** Highways a car can use (side streets, the route itself). */
 export const DRIVABLE = /^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)(_link)?$/;
 
@@ -31,8 +31,15 @@ export interface OsmFeatures {
     water: OsmArea[];
     /** Drivable roads within ~200 m of the route (v2+). */
     roads?: OsmWay[];
-    /** Street furniture within ~60 m of the route (v2+): signals, stop/give way, crossings, lamps, bus stops, signs. */
+    /** Street furniture within ~60 m of the route (v2+): signals, stop/give way, crossings, lamps, bus stops, signs;
+     *  fire hydrants and power poles (v3+). */
     points?: OsmPoint[];
+    /** Shops, restaurants, offices and other businesses within ~120 m of the route (v3+): storefronts. */
+    pois?: OsmPoint[];
+    /** Power and telephone lines within ~150 m of the route (v3+). */
+    power?: OsmLine[];
+    /** Ground-cover areas near the route (v3+): parking, parks, pitches, grass, cemeteries. */
+    areas?: OsmArea[];
 }
 
 /** Douglas-Peucker in degrees scaled to metres (for Overpass `around` lines, which have a length limit). */
@@ -66,7 +73,17 @@ export function overpassQuery(b: GeoBox, route?: LatLon[]): string {
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)(_link)?$"](around:200,${L});
   node["highway"~"^(traffic_signals|stop|give_way|crossing|street_lamp|bus_stop|speed_camera)$"](around:60,${L});
   node["traffic_sign"](around:60,${L});
-  node["railway"="level_crossing"](around:60,${L});`;
+  node["railway"="level_crossing"](around:60,${L});
+  node["emergency"="fire_hydrant"](around:60,${L});
+  node["power"~"^(pole|tower)$"](around:120,${L});
+  way["power"~"^(line|minor_line)$"](around:150,${L});
+  node["shop"](around:120,${L});
+  node["amenity"~"^(restaurant|cafe|fast_food|bar|pub|bank|pharmacy|post_office|library|clinic|dentist|doctors|ice_cream|fuel|car_wash|veterinary)$"](around:120,${L});
+  node["office"](around:120,${L});
+  node["craft"](around:120,${L});
+  way["amenity"="parking"](around:200,${L});
+  way["leisure"~"^(park|pitch|playground|golf_course)$"](around:300,${L});
+  way["landuse"~"^(grass|meadow|cemetery|recreation_ground|village_green)$"](around:300,${L});`;
     }
     return `[out:json][timeout:120];
 (
@@ -113,7 +130,7 @@ function joinOuter(members: El['members']): LatLon[][] {
 }
 
 export function parseOverpass(json: { elements?: El[] }, bbox: GeoBox, fetched: string): OsmFeatures {
-    const f: OsmFeatures = { version: OSM_VERSION, fetched, bbox, buildings: [], woods: [], trees: [], barriers: [], water: [], roads: [], points: [] };
+    const f: OsmFeatures = { version: OSM_VERSION, fetched, bbox, buildings: [], woods: [], trees: [], barriers: [], water: [], roads: [], points: [], pois: [], power: [], areas: [] };
     const seen = new Set<string>();
     for (const e of json.elements ?? []) {
         const key = `${e.type}${e.id}`;
@@ -123,7 +140,8 @@ export function parseOverpass(json: { elements?: El[] }, bbox: GeoBox, fetched: 
         if (e.type === 'node') {
             if (e.lat == null || e.lon == null) continue;
             if (t.natural === 'tree') f.trees.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
-            else if (t.highway || t.traffic_sign || t.railway === 'level_crossing') f.points!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
+            else if (t.highway || t.traffic_sign || t.railway === 'level_crossing' || t.emergency === 'fire_hydrant' || t.power === 'pole' || t.power === 'tower') f.points!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
+            else if (t.shop || t.amenity || t.office || t.craft) f.pois!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
             continue;
         }
         if (e.type === 'way' && t.highway && DRIVABLE.test(t.highway) && t.area !== 'yes') {
@@ -133,6 +151,8 @@ export function parseOverpass(json: { elements?: El[] }, bbox: GeoBox, fetched: 
         }
         const rings = e.type === 'way' ? [ring(e.geometry)].filter(closed) : joinOuter(e.members);
         if (t.building && t.building !== 'no') { for (const r of rings) f.buildings.push({ id: e.id, ring: r, tags: t }); continue; }
+        if ((t.power === 'line' || t.power === 'minor_line') && e.type === 'way') { const l = ring(e.geometry); if (l.length >= 2) f.power!.push({ id: e.id, line: l, tags: t }); continue; }
+        if (!t.natural && t.landuse !== 'forest' && (t.amenity === 'parking' || /^(park|pitch|playground|golf_course)$/.test(t.leisure ?? '') || (t.landuse && /^(grass|meadow|cemetery|recreation_ground|village_green)$/.test(t.landuse))) && !t.building) { if (rings.length) f.areas!.push({ id: e.id, rings, tags: t }); continue; }
         if (t.barrier && e.type === 'way') { const l = ring(e.geometry); if (l.length >= 2) f.barriers.push({ id: e.id, line: l, tags: t }); continue; }
         if (t.natural === 'tree_row' && e.type === 'way') { const l = ring(e.geometry); if (l.length >= 2) f.barriers.push({ id: e.id, line: l, tags: { ...t, barrier: 'tree_row' } }); continue; }
         if (t.natural === 'water') { if (rings.length) f.water.push({ id: e.id, rings, tags: t }); continue; }

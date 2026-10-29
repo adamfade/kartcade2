@@ -63,6 +63,20 @@ export class Mesh {
         tri(0, 1, 2);
         if (pts.length === 4) tri(0, 2, 3);
     }
+    /** A quad with its own per-vertex normals; `facing` decides the winding (as in face()). */
+    faceN(pts: V3[], facing: V3, uv: [number, number][], normals: V3[]) {
+        const p = this.part(pts.length);
+        const b = p.positions.length / 3;
+        const t = norm(sub(pts[1], pts[0]));
+        pts.forEach((q, k) => { p.positions.push(...q); p.normals.push(...normals[k]); p.uvs.push(...uv[k]); p.tangents.push(...t); });
+        const tri = (a: number, c: number, d: number) => {
+            const cr = cross(sub(pts[c], pts[a]), sub(pts[d], pts[a]));
+            if (Math.hypot(...cr) < 1e-12) return;
+            if (dot(cr, facing) >= 0) p.indices.push(b + a, b + c, b + d); else p.indices.push(b + a, b + d, b + c);
+        };
+        tri(0, 1, 2);
+        if (pts.length === 4) tri(0, 2, 3);
+    }
     double(pts: V3[], n: V3, uv: [number, number][], backUv?: [number, number][], shade?: V3) {
         this.face(pts, n, uv, shade);
         this.face(pts, [-n[0], -n[1], -n[2]], backUv ?? uv, shade);

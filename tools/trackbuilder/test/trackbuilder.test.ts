@@ -326,7 +326,8 @@ test('DEM storage: Terrarium PNG round trip keeps 1/256 m', () => {
 
 import { readFileSync } from 'node:fs';
 import { parseOverpass } from '../osm.ts';
-import { treeAtlas } from '../features.ts';
+import { BILLBOARD_CELLS, SPECIES, billboardAtlas, treeMeshes, treeModel } from '../trees.ts';
+import { MaterialBook } from '../materials.ts';
 
 test('OpenStreetMap surroundings: buildings, woods and barriers stay off the road and go into the KN5', () => {
     // A straight road through the real sample (Pete's Mountain area, West Linn), on flat ground.
@@ -376,20 +377,49 @@ test('OpenStreetMap surroundings: buildings, woods and barriers stay off the roa
     assert.equal(k.consumed, k.total);
     const tree = k.materials.find((m) => m.name === 'tree_billboard')!;
     assert.equal(tree.shader, 'ksPerPixelAT');
-    assert.ok(k.textures.some((t) => t.name === 'tree_atlas.dds'));
+    assert.ok(k.textures.some((t) => t.name === 'tree_billboards.dds'));
+    assert.ok(k.textures.some((t) => t.name === 'tree_foliage.dds'));
     const nodes: ReadNode[] = []; walk(k.root, (n) => nodes.push(n));
     for (const n of nodes) if (n.indexCount != null) { assert.ok(n.maxIndex! < n.vertexCount!); assert.equal(n.badNumbers ?? 0, 0); }
     assert.match(new TextDecoder().decode(res.files['osm_rd/ui/ui_track.json']), /building, woodland and barrier data © OpenStreetMap/);
 });
 
-test('tree atlas: four species cells, transparent around the foliage, opaque trunks', () => {
-    const a = treeAtlas();
-    assert.equal(a.width, 1024); assert.equal(a.height, 512);
+test('trees: billboards rendered from the 3D models, cells separate, models wound to face out', () => {
+    const a = billboardAtlas();
+    assert.equal(a.width, 2048); assert.equal(a.height, 1024);
     const alpha = (x: number, y: number) => a.data[(y * a.width + x) * 4 + 3];
-    for (let c = 0; c < 4; c++) {
-        assert.equal(alpha(c * 256 + 2, 4), 0, 'corner is transparent');
-        assert.equal(alpha(c * 256 + 128, 500), 255, 'trunk base is opaque');
-        // No cell bleeds into its neighbour (mip and filtering safety).
-        for (let y = 0; y < 512; y += 4) { assert.equal(alpha(c * 256, y), 0); assert.equal(alpha(c * 256 + 255, y), 0); }
+    BILLBOARD_CELLS.forEach((_, k) => {
+        const ox = (k % 4) * 512, oy = Math.floor(k / 4) * 512;
+        assert.equal(alpha(ox + 3, oy + 3), 0, 'corner is transparent');
+        assert.equal(alpha(ox + 256, oy + 505), 255, 'trunk base at the bottom centre is opaque');
+        let opaque = 0;
+        for (let y = oy; y < oy + 512; y += 2) for (let x = ox; x < ox + 512; x += 2) opaque += alpha(x, y) ? 1 : 0;
+        assert.ok(opaque > 6000, `cell ${k} has a crown (${opaque})`);
+    });
+    for (const sp of SPECIES) {
+        const m = treeModel(sp, 20, 1);
+        const tris = (m.bark.length + m.leaves.length) * 2;
+        assert.ok(tris > 100 && tris < 1600, `${sp}: ${tris} triangles`);
+        assert.ok(m.width > 5 && m.width < 21, `${sp}: width ${m.width}`);
+        for (const q of m.bark) {
+            // Limb faces face away from their axis: facing agrees with the shading normals.
+            const avg = q.n.reduce((s, n) => [s[0] + n[0], s[1] + n[1], s[2] + n[2]], [0, 0, 0]);
+            assert.ok(avg[0] * q.facing[0] + avg[1] * q.facing[1] + avg[2] * q.facing[2] > 0);
+        }
     }
+    // Placed trees: models near the road switch to billboards at distance.
+    const book = new MaterialBook();
+    const parts = treeMeshes([
+        { x: 0, z: 0, y: 0, h: 20, species: 'fir', seed: 1, model: true, distM: 12 },
+        { x: 30, z: 0, y: 0, h: 14, species: 'maple', seed: 2, model: true, distM: 20 },
+        { x: 300, z: 0, y: 0, h: 18, species: 'cedar', seed: 3, model: false, distM: 300 },
+        { x: 900, z: 0, y: 0, h: 18, species: 'oak', seed: 4, model: false, distM: 900 },
+    ], book, undefined);
+    const by = (pre: string) => parts.filter((p) => p.name.startsWith(pre));
+    assert.ok(by('TREE3D_LEAVES').length && by('TREE3D_BARK').length);
+    for (const p of by('TREE3D_')) assert.ok(p.lodOut! > 150 && !p.lodIn);
+    for (const p of by('TREEBB_NEAR')) assert.ok(p.lodIn! > 150 && p.lodIn! < by('TREE3D_')[0].lodOut!);
+    assert.ok(by('TREES_FAR')[0].lodOut! >= 3000);
+    assert.ok(by('TREES_').length);
+    for (const p of parts) { assert.equal(p.positions.length / 3, p.uvs.length / 2); assert.ok(Math.max(...p.indices) < p.positions.length / 3); }
 });

@@ -20,6 +20,8 @@ export interface MeshPart {
     castShadows?: boolean;
     /** Draw distance in metres (0 / absent = always). Used for far vegetation and buildings. */
     lodOut?: number;
+    /** Only drawn beyond this distance (far stand-ins for detailed models, e.g. tree billboards). */
+    lodIn?: number;
 }
 
 export interface Dummy { name: string; position: V3; forward: V3 }

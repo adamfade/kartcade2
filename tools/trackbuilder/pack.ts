@@ -1,5 +1,6 @@
 // Turns a road (polyline + heights) into a ready-to-install Assetto Corsa track folder and zip.
 
+import type { Rgba } from './dds.ts';
 import { zipSync } from 'fflate';
 import { buildCenterline, signedArea } from './route.ts';
 import { roadProfile } from './elevation.ts';
@@ -65,6 +66,8 @@ export interface BuildInput {
     bridgeStyles?: Record<string, BridgeStructure>;
     /** Use the OSM lanes for width and markings when the site has roads (default true); false keeps `width` throughout. */
     osmLanes?: boolean;
+    /** The driver's own photos of landmark facades (never Street View): the wall nearest each point shows it. */
+    facadePhotos?: { at: { lat: number; lon: number }; image: Rgba }[];
     /** 'geometry' skips the KN5, AI line, maps and zip (for the editor's preview); default 'full'. */
     output?: 'full' | 'geometry';
     log?: (msg: string) => void;
@@ -240,7 +243,7 @@ export function buildTrack(input: BuildInput): BuildResult {
     let features: MeshPart[] = [];
     let featureStats: FeatureStats = { buildings: 0, trees: 0, barriers: 0 };
     if (site?.osm) {
-        const f = buildFeatures(cl, geometry, site.osm, sampler, book, input.library, { site, stubs: streetBuild?.stubs });
+        const f = buildFeatures(cl, geometry, site.osm, sampler, book, input.library, { site, stubs: streetBuild?.stubs, facadePhotos: input.facadePhotos });
         features = f.parts; featureStats = f.stats;
         log(`Adding ${f.stats.buildings} buildings, ${f.stats.trees} trees and ${f.stats.barriers} barriers from OpenStreetMap`);
     }

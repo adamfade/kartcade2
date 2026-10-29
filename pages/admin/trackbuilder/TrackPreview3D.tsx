@@ -142,6 +142,7 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
             matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide, alphaTest: cut ? 0.5 : 0, transparent: false, ...(glow ? { emissive: glow, emissiveMap: map ?? null } : {}) }));
         }
     }
+    const lodMeshes: THREE.Mesh[] = [];
     for (const p of parts) {
         if (p.visible === false || !p.indices.length) continue;
         const g = new THREE.BufferGeometry();
@@ -158,16 +159,33 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
         g.computeBoundingSphere();
         const mesh = new THREE.Mesh(g, matByName.get(p.material) ?? new THREE.MeshLambertMaterial({ color: 0xff00ff }));
         mesh.name = p.name;
+        // Assetto Corsa LOD: drawn only between lodIn and lodOut metres from the camera (to the mesh's centre).
+        if (p.lodIn || p.lodOut) { mesh.userData.lodIn = p.lodIn ?? 0; mesh.userData.lodOut = p.lodOut || Infinity; lodMeshes.push(mesh); }
         // Paint sits 12 mm above the asphalt: nudge it forward in depth so it never flickers at a distance.
         if (p.name.startsWith('PAINT_')) { (mesh.material as THREE.Material).polygonOffset = true; (mesh.material as THREE.Material).polygonOffsetFactor = -2; mesh.renderOrder = 1; }
         group.add(mesh);
     }
+    group.userData.lodMeshes = lodMeshes;
     const dispose = () => {
         group.traverse((o) => { if ((o as THREE.Mesh).geometry) (o as THREE.Mesh).geometry.dispose(); });
         matByName.forEach((m) => m.dispose());
         texByName.forEach((t) => t.dispose());
     };
     return { group, dispose };
+}
+
+/** Show each LOD mesh only between its lodIn and lodOut distance, as Assetto Corsa does. */
+const lodCentre = new THREE.Vector3();
+function applyLods(scene: THREE.Scene, camera: THREE.Camera) {
+    for (const g of scene.children) {
+        const list = g.userData.lodMeshes as THREE.Mesh[] | undefined;
+        if (!list) continue;
+        for (const m of list) {
+            lodCentre.copy(m.geometry.boundingSphere!.center).applyMatrix4(m.matrixWorld);
+            const d = lodCentre.distanceTo(camera.position);
+            m.visible = d >= m.userData.lodIn && d < m.userData.lodOut;
+        }
+    }
 }
 
 /**
@@ -392,6 +410,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
                 controls.enabled = true;
                 controls.update();
             }
+            applyLods(scene, camera);
             renderer.render(scene, camera);
             raf = requestAnimationFrame(tick);
         };

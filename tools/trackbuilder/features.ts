@@ -18,7 +18,11 @@ import { sampleImage } from './site.ts';
 import type { SurfaceRaster } from './lidar.ts';
 import { laneSet, wayWidth } from './roadinfo.ts';
 import type { MaterialBook, MaterialLibrary } from './materials.ts';
-import { macroDetailMaterial, tileNoise } from './materials.ts';
+import { macroDetailMaterial, photoMaterial, tileNoise } from './materials.ts';
+import type { PlacedTree, Species } from './trees.ts';
+import { treeMeshes } from './trees.ts';
+import type { BuildingKind, Shop, Wall } from './buildings.ts';
+import { BuildingKit } from './buildings.ts';
 import type { Rgba } from './dds.ts';
 import { Mesh, box } from './elements.ts';
 
@@ -27,6 +31,12 @@ type P2 = { x: number; y: number };
 export interface FeatureOptions {
     /** Most trees to place (far ones are thinned first). */
     maxTrees?: number;
+    /** Trees near the road drawn as 3D models (the rest are billboards). */
+    maxTreeModels?: number;
+    /** Buildings whose nearest wall is within this distance of the route edge get windows, doors, porches (m). */
+    detailM?: number;
+    /** The driver's own photos of landmark facades: the wall nearest each point shows the photo. */
+    facadePhotos?: { at: { lat: number; lon: number }; image: Rgba }[];
     /** Buildings and barriers closer than this to the road get collision. */
     collisionM?: number;
     /** Site rasters: lidar surfaces and near-infrared imagery per cell, when stored. */
@@ -35,7 +45,7 @@ export interface FeatureOptions {
     stubs?: { pts: P2[]; half: number }[];
 }
 
-export interface FeatureStats { buildings: number; trees: number; barriers: number; lidarBuildings?: number; lidarTrees?: number; canopyTrees?: number }
+export interface FeatureStats { buildings: number; trees: number; barriers: number; lidarBuildings?: number; lidarTrees?: number; canopyTrees?: number; treeModels?: number; detail?: BuildingKit['stats']; roofColours?: number }
 
 const CELL = 256;
 function hash(n: number) { let h = (n ^ 0x9e3779b9) >>> 0; h = Math.imul(h ^ (h >>> 16), 0x85ebca6b); h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
@@ -43,6 +53,9 @@ function rng(seed: number) { let s = seed >>> 0 || 1; return () => { s = (Math.i
 
 // ---------------------------------------------------------------- geometry helpers
 
+function norm2(p: P2): P2 { const l = Math.hypot(p.x, p.y) || 1; return { x: p.x / l, y: p.y / l }; }
+function segDist(p: P2, a: P2, b: P2) { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)); return Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t); }
+function ringDist(p: P2, r: P2[]) { let d = Infinity; for (let i = 0; i < r.length; i++) d = Math.min(d, segDist(p, r[i], r[(i + 1) % r.length])); return d; }
 function signedArea(r: P2[]) { let a = 0; for (let i = 0; i < r.length; i++) { const p = r[i], q = r[(i + 1) % r.length]; a += p.x * q.y - q.x * p.y; } return a / 2; }
 function inRing(p: P2, r: P2[]) {
     let inside = false;
@@ -112,80 +125,13 @@ function solid(rgb: [number, number, number], seed: number, variation = 0.1): Rg
     return { width: N, height: N, data };
 }
 
-/**
- * Tree sprite atlas, 1024 x 512, four 256 x 512 cells: Douglas fir, Douglas fir (fuller), western red cedar,
- * bigleaf maple. Drawn from thousands of small needle/leaf clumps inside each species' silhouette, lit from the
- * upper left, alpha 0 outside the foliage (alpha-tested in AC).
- */
-export function treeAtlas(): Rgba {
-    const W = 1024, H = 512, CW = 256;
-    const data = new Uint8Array(W * H * 4);
-    const put = (x: number, y: number, c: number[], a = 255) => {
-        if (x < 0 || y < 0 || x >= W || y >= H) return;
-        const i = (y * W + x) * 4;
-        data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = a;
-    };
-    const blob = (cx: number, cy: number, r: number, c: number[], cell: number) => {
-        for (let y = Math.floor(cy - r); y <= cy + r; y++) for (let x = Math.floor(cx - r); x <= cx + r; x++) {
-            if (x < cell * CW + 1 || x >= (cell + 1) * CW - 1) continue;
-            const d = Math.hypot(x - cx, y - cy) / r;
-            if (d <= 1) put(x, y, c.map((v) => Math.max(0, Math.min(255, v * (1.08 - 0.25 * d)))));
-        }
-    };
-    const species = [
-        { cell: 0, kind: 'fir', base: [40, 66, 38], spread: 0.36, seed: 3 },
-        { cell: 1, kind: 'fir', base: [46, 74, 42], spread: 0.42, seed: 7 },
-        { cell: 2, kind: 'cedar', base: [52, 78, 40], spread: 0.4, seed: 11 },
-        { cell: 3, kind: 'maple', base: [62, 92, 42], spread: 0.9, seed: 13 },
-    ];
-    for (const sp of species) {
-        const rand = rng(sp.seed);
-        const cx = sp.cell * CW + CW / 2;
-        // Trunk.
-        const trunkTop = sp.kind === 'maple' ? H * 0.55 : H * 0.15;
-        for (let y = Math.floor(trunkTop); y < H; y++) for (let x = -5; x <= 5; x++) put(Math.round(cx + x), y, [74 - Math.abs(x) * 4, 56 - Math.abs(x) * 3, 40]);
-        const clumps = sp.kind === 'maple' ? 2600 : 3600;
-        for (let k = 0; k < clumps; k++) {
-            let x: number, y: number, r: number;
-            if (sp.kind === 'maple') {
-                // Several overlapping lobes making a broad crown.
-                const lobe = Math.floor(rand() * 6);
-                const lx = cx + Math.cos(lobe * 1.3) * CW * 0.22, ly = H * 0.3 + Math.sin(lobe * 2.1) * H * 0.1;
-                const a = rand() * Math.PI * 2, d = Math.sqrt(rand()) * CW * 0.24;
-                x = lx + Math.cos(a) * d; y = ly + Math.sin(a) * d * 1.1; r = 3 + rand() * 5;
-            } else {
-                // Conical crown: branch tiers droop outward; width grows towards the bottom.
-                const t = Math.pow(rand(), 0.8); // 0 top .. 1 bottom of crown
-                y = H * 0.03 + t * H * 0.85;
-                const halfW = CW * sp.spread * (0.08 + t * 0.92) * (0.85 + 0.3 * Math.sin(t * 40 + sp.seed));
-                const side = rand() < 0.5 ? -1 : 1, off = Math.pow(rand(), 0.6) * halfW;
-                x = cx + side * off;
-                y += (off / Math.max(1, halfW)) * (sp.kind === 'cedar' ? 18 : 8); // branch tips droop
-                r = 2.5 + rand() * (sp.kind === 'cedar' ? 4 : 3.5);
-            }
-            // Light from upper left; darker inside the crown.
-            const lx = (x - cx) / (CW * 0.5), ly = y / H;
-            const shade = 0.75 + 0.35 * (-lx * 0.5 + (1 - ly) * 0.5) + (rand() - 0.5) * 0.25;
-            blob(x, y, r, sp.base.map((v) => v * shade), sp.cell);
-        }
-        // Transparent texels take the crown's darker average colour, so filtering at the cut-out edge never
-        // pulls in black.
-        const sum = [0, 0, 0]; let n = 0;
-        for (let y = 0; y < H; y++) for (let x = sp.cell * CW; x < (sp.cell + 1) * CW; x++) {
-            const i = (y * W + x) * 4; if (data[i + 3]) { sum[0] += data[i]; sum[1] += data[i + 1]; sum[2] += data[i + 2]; n++; }
-        }
-        for (let y = 0; y < H; y++) for (let x = sp.cell * CW; x < (sp.cell + 1) * CW; x++) {
-            const i = (y * W + x) * 4; if (!data[i + 3]) for (let c = 0; c < 3; c++) data[i + c] = Math.round((sum[c] / Math.max(1, n)) * 0.8);
-        }
-    }
-    return { width: W, height: H, data };
-}
 
 // ---------------------------------------------------------------- builder
 
 const WALL_COLOURS: [number, number, number][] = [[226, 223, 214], [198, 182, 152], [152, 154, 150], [140, 150, 122], [178, 152, 114], [122, 136, 150]];
 const ROOF_COLOURS: [number, number, number][] = [[62, 62, 64], [46, 46, 50], [82, 66, 52]];
 const BARN_COLOURS: [number, number, number][] = [[138, 48, 38], [150, 148, 140], [110, 92, 70]];
+const SHOP_COLOURS: [number, number, number][] = [[150, 84, 64], [176, 160, 132], [120, 66, 52], [196, 188, 170], [98, 104, 110], [140, 120, 96]];
 const METAL_COLOURS: [number, number, number][] = [[150, 152, 155], [70, 96, 74], [140, 52, 44]];
 
 export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures, ground: HeightSampler, book: MaterialBook, lib: MaterialLibrary | undefined, opts: FeatureOptions = {}): { parts: MeshPart[]; stats: FeatureStats } {
@@ -270,19 +216,60 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
         name: `bld_${role}_${rgb.join('_')}`, role, specular: role === 'metal_roof' ? 0.3 : 0.06, reflection: role === 'metal_roof' ? 0.15 : 0.02,
         macro: { key: `roofm_${rgb.join('_')}`, image: () => solid(rgb, rgb[1]), sizeM: 8 },
     });
-    let treeMat = '';
-    const treeMaterial = () => {
-        if (treeMat) return treeMat;
-        const tex = book.image('tree_atlas.dds', treeAtlas, { format: 'bc3', mips: 'cutout' });
-        treeMat = book.add({
-            name: 'tree_billboard', shader: 'ksPerPixelAT', alphaTested: true,
-            properties: [{ name: 'ksAmbient', a: 0.5 }, { name: 'ksDiffuse', a: 0.5 }, { name: 'ksSpecular', a: 0 }, { name: 'ksSpecularEXP', a: 1 }, { name: 'ksEmissive', c: [0, 0, 0] }, { name: 'ksAlphaRef', a: 0.5 }],
-            textures: [{ sampler: 'txDiffuse', slot: 0, texture: tex }],
-        });
-        return treeMat;
+    const extraParts: MeshPart[] = [];
+    const kit = new BuildingKit(book, lib, (kind, p, material) => meshFor(kind, p, material));
+    const detailM = opts.detailM ?? 150;
+
+    /** Roof colour from the aerial photo: median of the footprint's non-vegetation pixels, snapped to a small
+     *  palette so roofs share materials. Null without imagery or when trees cover the roof. */
+    const roofPalette: [number, number, number][] = [];
+    const roofColour = (ring: P2[]): [number, number, number] | null => {
+        const c = cellAt(proj.toLatLon(ring[0])) ?? (opts.site?.cells ?? []).find((cc) => { const ll = proj.toLatLon(ring[0]); return ll.lon >= cc.bbox.west && ll.lon < cc.bbox.east && ll.lat >= cc.bbox.south && ll.lat < cc.bbox.north; });
+        if (!c?.rgb) return null;
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        for (const p of ring) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+        const px: [number, number, number][] = [];
+        const step = Math.max(0.7, Math.sqrt(((x1 - x0) * (y1 - y0)) / 400));
+        for (let y = y0 + 0.8; y < y1 - 0.8; y += step) for (let x = x0 + 0.8; x < x1 - 0.8; x += step) {
+            const p = { x, y };
+            if (!inRing(p, ring)) continue;
+            const ll = proj.toLatLon(p), v = sampleImage(c.rgb, ll);
+            if (!v) continue;
+            const nd = ndviAt(c, ll);
+            if (nd != null ? nd > 0.12 : v[1] > v[0] * 1.12 && v[1] > v[2] * 1.12) continue; // tree over the roof
+            px.push(v);
+        }
+        if (px.length < 6) return null;
+        // Median by brightness of the sunlit half (shadowed slopes read darker than the material).
+        px.sort((a, b) => a[0] + a[1] + a[2] - (b[0] + b[1] + b[2]));
+        const sun = px.slice(Math.floor(px.length * 0.4));
+        const m = sun[Math.floor(sun.length / 2)];
+        const rgb: [number, number, number] = [m[0], m[1], m[2]].map((v) => Math.round(Math.min(220, v * 0.92))) as [number, number, number];
+        let best = -1, bd = 26;
+        roofPalette.forEach((q, k) => { const d = Math.hypot(q[0] - rgb[0], q[1] - rgb[1], q[2] - rgb[2]); if (d < bd) { bd = d; best = k; } });
+        if (best >= 0) return roofPalette[best];
+        if (roofPalette.length < 18) { roofPalette.push(rgb); return rgb; }
+        roofPalette.forEach((q, k) => { const d = Math.hypot(q[0] - rgb[0], q[1] - rgb[1], q[2] - rgb[2]); if (best < 0 || d < bd) { bd = d; best = k; } });
+        return roofPalette[best];
     };
 
-    const stats: FeatureStats = { buildings: 0, trees: 0, barriers: 0, lidarBuildings: 0, lidarTrees: 0, canopyTrees: 0 };
+    // Businesses (OpenStreetMap shop / amenity / office nodes) go on the building they stand in or next to.
+    const pois = (osm.pois ?? []).map((q) => ({ p: L(q.at), tags: q.tags }));
+    const photos = (opts.facadePhotos ?? []).map((ph, k) => ({ p: L(ph.at), tex: book.image(`facade_photo_${k}.dds`, () => ph.image, { format: 'bc1' }) }));
+    /** Nearest point on any road (route or mapped street) and the distance to it. */
+    const nearestRoad = (p: P2): { x: number; y: number; d: number } => {
+        const q = nearRoute(p, 200);
+        let best = { x: P[q.i].x, y: P[q.i].y, d: q.d - g.halfAt(q.i) };
+        for (const sgm of roadSegs.get(`${Math.floor(p.x / RG)},${Math.floor(p.y / RG)}`) ?? []) {
+            const dx = sgm.bx - sgm.ax, dy = sgm.by - sgm.ay, l2 = dx * dx + dy * dy || 1;
+            const t = Math.max(0, Math.min(1, ((p.x - sgm.ax) * dx + (p.y - sgm.ay) * dy) / l2));
+            const x = sgm.ax + dx * t, y = sgm.ay + dy * t, d = Math.hypot(p.x - x, p.y - y) - sgm.h;
+            if (d < best.d) best = { x, y, d };
+        }
+        return best;
+    };
+
+    const stats: FeatureStats = { buildings: 0, trees: 0, barriers: 0, lidarBuildings: 0, lidarTrees: 0, canopyTrees: 0, detail: kit.stats };
 
     /** Lidar heights inside a footprint: sorted heights above ground of non-vegetation returns. */
     const roofSamples = (ring: P2[]): number[] => {
@@ -310,75 +297,155 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
 
     // ------------------------------------------------ buildings
     const footprints: P2[][] = [];
-    /** One building: walls from the footprint, roof by shape. `measured` = lidar wall and ridge heights. */
+    /** Offsets a counter-clockwise ring outward by d (mitred, clamped at sharp corners). */
+    const offsetRing = (ring: P2[], d: number): P2[] => ring.map((p, i) => {
+        const a = ring[(i + ring.length - 1) % ring.length], c = ring[(i + 1) % ring.length];
+        const n1 = norm2({ x: p.y - a.y, y: -(p.x - a.x) }), n2 = norm2({ x: c.y - p.y, y: -(c.x - p.x) });
+        const m = norm2({ x: n1.x + n2.x, y: n1.y + n2.y }), k = Math.min(2.5, 1 / Math.max(0.3, m.x * n2.x + m.y * n2.y));
+        return { x: p.x + m.x * d * k, y: p.y + m.y * d * k };
+    });
+    /** One building: walls from the footprint, roof by shape, and (near the road) windows, doors and the rest.
+     *  `measured` = lidar wall and ridge heights. */
     const addBuilding = (ringIn: P2[], t: Record<string, string>, id: number, measured: { wall: number; rise: number; flat: boolean } | null) => {
         let ring = ringIn;
         if (signedArea(ring) < 0) ring = ring.slice().reverse(); // counter-clockwise
         const area = Math.abs(signedArea(ring));
-        const kind = t.building ?? 'yes';
-        const rnd = hash(id);
-        const barn = /^(barn|farm_auxiliary|shed|stable|cowshed|greenhouse)$/.test(kind);
-        const big = /^(commercial|industrial|retail|warehouse|supermarket|school|hospital|office|apartments)$/.test(kind) || area > 700;
-        const small = /^(garage|garages|carport|shed|hut)$/.test(kind) || area < 45;
-        const levels = parseFloat(t['building:levels'] ?? '') || (small ? 1 : big ? 2 : area > 140 && rnd > 0.6 ? 2 : 1);
+        const tag = t.building ?? 'yes';
+        const rnd = hash(id), rnd2 = hash(id * 7 + 3);
+        const centre = ring.reduce((a, p) => ({ x: a.x + p.x / ring.length, y: a.y + p.y / ring.length }), { x: 0, y: 0 });
+        const near = Math.min(...ring.map((p) => routeEdge(p, detailM + 60))) < detailM;
+        // Businesses in or beside this footprint.
+        const mine = near ? pois.filter((q) => Math.abs(q.p.x - centre.x) < 80 && Math.abs(q.p.y - centre.y) < 80 && (inRing(q.p, ring) || ringDist(q.p, ring) < 6)) : [];
+        const barn = /^(barn|farm_auxiliary|shed|stable|cowshed|greenhouse)$/.test(tag);
+        const shopTag = /^(retail|commercial|supermarket|kiosk)$/.test(tag) || !!t.shop || !!t.amenity && /^(restaurant|cafe|fast_food|bar|pub|bank|pharmacy)$/.test(t.amenity);
+        const big = /^(commercial|industrial|retail|warehouse|supermarket|school|hospital|office|apartments|civic|public|church)$/.test(tag) || area > 700;
+        const small = /^(garage|garages|carport|shed|hut)$/.test(tag) || area < 45;
+        let levels = parseFloat(t['building:levels'] ?? '') || (small ? 1 : big ? 2 : area > 140 && rnd > 0.6 ? 2 : 1);
         const tagged = parseFloat(t.height ?? '');
-        const wallH = measured ? measured.wall : tagged ? Math.max(2.5, tagged * 0.75) : levels * 2.9 + 0.4;
+        let wallH = measured ? measured.wall : tagged ? Math.max(2.5, tagged * 0.75) : levels * 2.9 + 0.4;
+        if (measured) levels = Math.max(1, Math.round((wallH - 0.4) / 2.9));
+        const kind: BuildingKind = barn ? 'barn' : small ? 'small' : (shopTag || mine.length) && area < 4000 ? 'shop' : tag === 'apartments' || (levels >= 3 && !big) ? 'apartments' : big ? 'big' : 'house';
+        if (kind === 'shop' && near) wallH = Math.max(wallH, 4.6);
         const gz = ring.map((p) => H(p));
         const base = Math.min(...gz) - 0.4, top = Math.max(...gz) + wallH;
-        const centre = ring.reduce((a, p) => ({ x: a.x + p.x / ring.length, y: a.y + p.y / ring.length }), { x: 0, y: 0 });
         const coll = roadDist(centre) < collisionM;
+        const wallRgb = WALL_COLOURS[Math.floor(rnd * WALL_COLOURS.length)];
         const wmat = barn ? wallMat(BARN_COLOURS[Math.floor(rnd * 3)], 'siding', false)
-            : big ? wallMat([168, 164, 156], rnd > 0.5 ? 'brick' : 'concrete', true)
-            : wallMat(WALL_COLOURS[Math.floor(rnd * WALL_COLOURS.length)], small ? 'siding' : rnd > 0.85 ? 'brick' : 'siding', !small);
+            : kind === 'shop' ? wallMat(SHOP_COLOURS[Math.floor(rnd * SHOP_COLOURS.length)], rnd2 > 0.45 ? 'brick' : 'concrete', !near)
+            : big || kind === 'apartments' ? wallMat([168, 164, 156], rnd > 0.5 ? 'brick' : 'concrete', !near)
+            : wallMat(wallRgb, small ? 'siding' : rnd > 0.85 ? 'brick' : 'siding', !small && !near);
         const walls = meshFor(coll ? '1WALL_BLD' : 'BLD', centre, wmat);
         // Walls: one quad per footprint edge, outward normals, UV = metres along the perimeter / 8, height / 8.
         let perim = 0;
+        const wallList: Wall[] = [];
         for (let i = 0; i < ring.length; i++) {
             const a = ring[i], c = ring[(i + 1) % ring.length], len = Math.hypot(c.x - a.x, c.y - a.y);
             if (len < 0.05) continue;
             const n: V3 = [(c.y - a.y) / len, 0, -(c.x - a.x) / len]; // right of a->c is outside for CCW rings
             const u0 = perim / 8, u1 = (perim + len) / 8, v0 = (base - (top - wallH)) / 8;
             walls.face([[a.x, base, a.y], [c.x, base, c.y], [c.x, top, c.y], [a.x, top, a.y]], n, [[u0, v0], [u1, v0], [u1, wallH / 8], [u0, wallH / 8]]);
+            wallList.push({ a, c, n: { x: n[0], y: n[2] }, len, ground: H({ x: (a.x + c.x) / 2, y: (a.y + c.y) / 2 }) });
             perim += len;
         }
-        // Roof.
-        const flat = measured ? measured.flat : big || t['roof:shape'] === 'flat';
-        const rmat = barn || big ? roofMat(METAL_COLOURS[Math.floor(rnd * 3)], 'metal_roof') : roofMat(ROOF_COLOURS[Math.floor(rnd * 3)], 'roof');
+        // Roof: colour from the aerial photo where it can be read, else a typical one for the type.
+        const flat = measured ? measured.flat : big || kind === 'shop' || t['roof:shape'] === 'flat';
+        const seen = roofColour(ring);
+        const metal = barn || (big && !seen);
+        const rmat = seen ? roofMat(seen, flat || barn ? 'metal_roof' : 'roof') : metal ? roofMat(METAL_COLOURS[Math.floor(rnd * 3)], 'metal_roof') : roofMat(ROOF_COLOURS[Math.floor(rnd * 3)], 'roof');
         const roof = meshFor(coll ? '1WALL_ROOF' : 'ROOF', centre, rmat);
+        const trim = near ? meshFor('BLDD', centre, kit.mat('trim')) : null;
         const o = obb(ring);
         const rect = area / Math.max(1, o.w * o.d);
         if (flat) {
-            // Flat roof: fan over the footprint (triangulated from the centroid; fine for near-convex shapes).
+            // Flat roof: fan over the footprint (triangulated from the centroid; fine for near-convex shapes), and a
+            // parapet cap so the edge has some thickness.
             for (let i = 0; i < ring.length; i++) {
                 const a = ring[i], c = ring[(i + 1) % ring.length];
                 roof.face([[centre.x, top + 0.05, centre.y], [a.x, top + 0.05, a.y], [c.x, top + 0.05, c.y]], [0, 1, 0], [[centre.x / 8, centre.y / 8], [a.x / 8, a.y / 8], [c.x / 8, c.y / 8]]);
             }
+            if (trim && !small) for (const w of wallList) {
+                const P3 = (p: P2, dd: number, y: number): V3 => [p.x + w.n.x * dd, y, p.y + w.n.y * dd];
+                const cap = meshFor('BLDD', centre, kit.mat(kind === 'shop' ? 'dark' : 'trim'));
+                cap.face([P3(w.a, 0.12, top - 0.35), P3(w.c, 0.12, top - 0.35), P3(w.c, 0.12, top + 0.2), P3(w.a, 0.12, top + 0.2)], [w.n.x, 0, w.n.y], [[0, 0], [w.len / 2, 0], [w.len / 2, 0.3], [0, 0.3]]);
+                cap.face([P3(w.a, 0.12, top + 0.2), P3(w.c, 0.12, top + 0.2), P3(w.c, -0.2, top + 0.2), P3(w.a, -0.2, top + 0.2)], [0, 1, 0], [[0, 0], [w.len / 2, 0], [w.len / 2, 0.15], [0, 0.15]]);
+            }
         } else if (rect > 0.78) {
             // Gable over the oriented rectangle, ridge along the long axis, 0.4 m overhang (26.6 deg pitch, or lidar).
-            const ov = 0.4, hw = o.w / 2 + ov, hd = o.d / 2 + ov;
+            const ov = 0.45, hw = o.w / 2 + ov, hd = o.d / 2 + ov;
             const rise = measured ? Math.max(0.8, Math.min(measured.rise, o.d * 0.6)) : (o.d / 2) * 0.5;
             const ax = o.ax, ay = { x: -ax.y, y: ax.x };
             const pt = (u: number, v: number, y: number): V3 => [o.c.x + ax.x * u + ay.x * v, y, o.c.y + ax.y * u + ay.y * v];
-            const slope = Math.hypot(hd, rise);
+            const slope = Math.hypot(hd, rise), eave = top - ov * (rise / (o.d / 2));
             for (const sd of [-1, 1]) {
                 const nx = ay.x * sd * rise, nz = ay.y * sd * rise, ny = hd, nl = Math.hypot(nx, ny, nz);
-                roof.double([pt(-hw, sd * hd, top - ov * (rise / (o.d / 2))), pt(hw, sd * hd, top - ov * (rise / (o.d / 2))), pt(hw, 0, top + rise), pt(-hw, 0, top + rise)], [nx / nl, ny / nl, nz / nl],
+                roof.double([pt(-hw, sd * hd, eave), pt(hw, sd * hd, eave), pt(hw, 0, top + rise), pt(-hw, 0, top + rise)], [nx / nl, ny / nl, nz / nl],
                     [[0, 0], [2 * hw / 8, 0], [2 * hw / 8, slope / 8], [0, slope / 8]]);
+                if (trim) {
+                    // Fascia board along the eave and the soffit under the overhang.
+                    trim.face([pt(-hw, sd * hd, eave - 0.2), pt(hw, sd * hd, eave - 0.2), pt(hw, sd * hd, eave), pt(-hw, sd * hd, eave)], [ay.x * sd, 0, ay.y * sd], [[0, 0], [hw, 0], [hw, 0.1], [0, 0.1]]);
+                    trim.face([pt(-hw, sd * o.d / 2, eave - 0.2), pt(hw, sd * o.d / 2, eave - 0.2), pt(hw, sd * hd, eave - 0.2), pt(-hw, sd * hd, eave - 0.2)], [0, -1, 0], [[0, 0], [hw, 0], [hw, 0.2], [0, 0.2]]);
+                    // Rake boards up the gable ends.
+                    for (const se of [-1, 1]) {
+                        const n3: V3 = [ax.x * se, 0, ax.y * se];
+                        trim.face([pt(se * hw, sd * hd, eave - 0.2), pt(se * hw, 0, top + rise - 0.2), pt(se * hw, 0, top + rise), pt(se * hw, sd * hd, eave)], n3, [[0, 0], [slope / 2, 0], [slope / 2, 0.1], [0, 0.1]]);
+                    }
+                }
             }
             // Gable ends (siding) under the roof.
             for (const sd of [-1, 1]) {
                 const n: V3 = [ax.x * sd, 0, ax.y * sd];
                 walls.face([pt(sd * o.w / 2, -o.d / 2, top), pt(sd * o.w / 2, o.d / 2, top), pt(sd * o.w / 2, 0, top + rise)], n, [[0, 0], [o.d / 8, 0], [o.d / 16, rise / 8]]);
             }
+            if (near && kind === 'house' && rnd2 < 0.4 && rise > 1.2) kit.chimney(pt((rnd < 0.5 ? -1 : 1) * o.w * 0.3, o.d * 0.12, 0), top + rise, top);
         } else {
-            // Hip: every eave edge slopes up to an apex over the centre.
+            // Hip: eaves overhang 0.4 m and every eave edge slopes up to an apex over the centre.
             const rise = measured ? Math.max(0.8, Math.min(measured.rise, Math.min(o.w, o.d) * 0.5)) : Math.min(o.w, o.d) * 0.35;
+            const reach = ring.reduce((s2, p) => s2 + Math.hypot(p.x - centre.x, p.y - centre.y), 0) / ring.length;
+            const ov = 0.4, eave = top - ov * (rise / Math.max(1, reach)), er = offsetRing(ring, ov);
             for (let i = 0; i < ring.length; i++) {
-                const a = ring[i], c = ring[(i + 1) % ring.length];
+                const a = er[i], c = er[(i + 1) % er.length];
                 const e = { x: (a.x + c.x) / 2 - centre.x, y: (a.y + c.y) / 2 - centre.y }, el = Math.hypot(e.x, e.y) || 1;
                 const n: V3 = [e.x / el * rise, el, e.y / el * rise], nl = Math.hypot(...n);
-                roof.double([[a.x, top, a.y], [c.x, top, c.y], [centre.x, top + rise, centre.y]], [n[0] / nl, n[1] / nl, n[2] / nl], [[0, 0], [Math.hypot(c.x - a.x, c.y - a.y) / 8, 0], [0.5, Math.hypot(el, rise) / 8]]);
+                roof.double([[a.x, eave, a.y], [c.x, eave, c.y], [centre.x, top + rise, centre.y]], [n[0] / nl, n[1] / nl, n[2] / nl], [[0, 0], [Math.hypot(c.x - a.x, c.y - a.y) / 8, 0], [0.5, Math.hypot(el, rise) / 8]]);
+                if (trim) {
+                    const w0 = ring[i], w1 = ring[(i + 1) % ring.length], len = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+                    const fn: V3 = [(c.y - a.y) / len, 0, -(c.x - a.x) / len];
+                    trim.face([[a.x, eave - 0.2, a.y], [c.x, eave - 0.2, c.y], [c.x, eave, c.y], [a.x, eave, a.y]], fn, [[0, 0], [len / 2, 0], [len / 2, 0.1], [0, 0.1]]);
+                    trim.face([[w0.x, eave - 0.2, w0.y], [w1.x, eave - 0.2, w1.y], [c.x, eave - 0.2, c.y], [a.x, eave - 0.2, a.y]], [0, -1, 0], [[0, 0], [len / 2, 0], [len / 2, 0.2], [0, 0.2]]);
+                }
             }
+            if (near && kind === 'house' && rnd2 < 0.35 && rise > 1.2) kit.chimney([centre.x + o.ax.x * o.w * 0.18, 0, centre.y + o.ax.y * o.w * 0.18], top + rise * 0.8, top);
+        }
+        // Windows, doors, porches, garage doors, storefronts.
+        if (near) {
+            let front = -1, bestScore = 0;
+            wallList.forEach((w, wi) => {
+                const m = { x: (w.a.x + w.c.x) / 2, y: (w.a.y + w.c.y) / 2 }, q = nearestRoad(m);
+                const dx = q.x - m.x, dy = q.y - m.y, dl = Math.hypot(dx, dy) || 1;
+                const score = Math.min(w.len, 14) * Math.max(0, (dx * w.n.x + dy * w.n.y) / dl) / (1 + Math.max(0, q.d) / 12);
+                if (score > bestScore) { bestScore = score; front = wi; }
+            });
+            const shops: Shop[] = front < 0 ? [] : mine.map((q) => {
+                const w = wallList[front], tx = (w.c.x - w.a.x) / w.len, ty = (w.c.y - w.a.y) / w.len;
+                return { name: q.tags.name, tags: q.tags, u: Math.max(0, Math.min(w.len, (q.p.x - w.a.x) * tx + (q.p.y - w.a.y) * ty)) };
+            });
+            const ph = new Map<number, string>();
+            for (const f of photos) {
+                if (Math.abs(f.p.x - centre.x) > 60 || Math.abs(f.p.y - centre.y) > 60) continue;
+                let bi = -1, bd = 6;
+                wallList.forEach((w, wi) => { const d = segDist(f.p, w.a, w.c); if (d < bd) { bd = d; bi = wi; } });
+                if (bi >= 0) ph.set(bi, f.tex);
+            }
+            let frontRoom = 0;
+            if (front >= 0) {
+                const w = wallList[front];
+                frontRoom = Infinity;
+                for (let k = 0; k <= 4; k++) {
+                    const p = { x: w.a.x + (w.c.x - w.a.x) * k / 4, y: w.a.y + (w.c.y - w.a.y) * k / 4 };
+                    for (let dd = 0.5; dd <= 6; dd += 0.5) if (clearOfRoads({ x: p.x + w.n.x * dd, y: p.y + w.n.y * dd }) < 0.5) { frontRoom = Math.min(frontRoom, dd); break; }
+                }
+            }
+            kit.detail({ walls: wallList, kind, base, top, levels, front, frontRoom, seed: id, roofMat: rmat, shops, photos: ph });
         }
         footprints.push(ring);
         stats.buildings++;
@@ -559,24 +626,25 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
     trees.sort((a, b) => a.d - b.d);
     const kept = trees.slice(0, maxTrees);
     if (kept.length) {
-        const mat = treeMaterial();
+        // Species from the sprite variant (0/1 fir, 2 cedar, 3 broadleaf: oak or maple, or a street tree when it
+        // stands in town by a street). Trees within ~25 m of the road edge get a 3D model.
+        const placed: PlacedTree[] = [];
+        let models = 0;
+        const maxModels = opts.maxTreeModels ?? 1500;
         for (const t of kept) {
             const y = H(t.p) - 0.2;
-            const w = t.w;
-            const far = t.d > 700;
-            const m = meshFor(far ? 'TREES_FAR' : 'TREES', t.p, mat, { castShadows: !far });
-            const u0 = t.variant * 0.25 + 0.002, u1 = (t.variant + 1) * 0.25 - 0.002;
-            const rot = hash(t.p.x * 7.1 + t.p.y * 3.3) * Math.PI;
-            for (const k of [0, 1]) {
-                const a = rot + (k * Math.PI) / 2, dx = Math.cos(a) * w / 2, dz = Math.sin(a) * w / 2;
-                // Both faces of each plane; stored normals point up so foliage lights evenly from every side.
-                const pn: V3 = [-Math.sin(a), 0, Math.cos(a)];
-                m.double([[t.p.x - dx, y, t.p.y - dz], [t.p.x + dx, y, t.p.y + dz], [t.p.x + dx, y + t.h, t.p.y + dz], [t.p.x - dx, y + t.h, t.p.y - dz]], pn,
-                    [[u0, 0], [u1, 0], [u1, 1], [u0, 1]], undefined, [0, 1, 0]);
-            }
+            const hv = hash(t.p.x * 7.1 + t.p.y * 3.3);
+            const edge = t.d - g.halfAt(nearRoute(t.p, 200).i);
+            const species: Species = t.variant <= 1 ? 'fir' : t.variant === 2 ? 'cedar'
+                : t.h < 13 && (otherRoadEdge(t.p) < 8 || edge < 10) ? 'street' : hv < 0.4 ? 'oak' : 'maple';
+            const model = edge < 25 && models < maxModels;
+            if (model) models++;
+            placed.push({ x: t.p.x, z: t.p.y, y, h: t.h, species, seed: Math.floor(hv * 1e6), model, distM: t.d });
             // Trees inside the drivable corridor get a hidden trunk to hit.
-            if (t.d < g.halfAt(nearRoute(t.p, 200).i) + 45) box(meshFor('1WALL_TRUNKS', t.p, mat, { visible: false, castShadows: false }), [t.p.x, y, t.p.y], [1, 0, 0], 0.5, 0.5, 3);
+            if (t.d < g.halfAt(nearRoute(t.p, 200).i) + 45) box(meshFor('1WALL_TRUNKS', t.p, photoMaterial(book, lib, 'tree_bark', 'bark'), { visible: false, castShadows: false }), [t.p.x, y, t.p.y], [1, 0, 0], 0.5, 0.5, 3);
         }
+        extraParts.push(...treeMeshes(placed, book, lib));
+        stats.treeModels = models;
         stats.trees = kept.length;
     }
 
@@ -624,13 +692,14 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
         stats.barriers++;
     }
 
-    const parts = [...meshes.values()].flatMap((m) => m.parts).filter((p) => p.indices.length);
+    const parts = [...meshes.values(), ].flatMap((m) => m.parts).filter((p) => p.indices.length);
     for (const p of parts) {
-        if (p.name.startsWith('TREES_FAR')) p.lodOut = 3500;
+        if (p.name.startsWith('BLDD')) p.lodOut = 900; // windows, doors, trim: gone where they'd be a few pixels
         else if ((p.name.startsWith('BLD') || p.name.startsWith('ROOF')) && p.name.split('_').length > 2) {
             // Far building chunks drop out beyond 4 km (Assetto Corsa LOD).
             p.lodOut = 4000;
         }
     }
-    return { parts, stats };
+    stats.roofColours = roofPalette.length;
+    return { parts: [...parts, ...extraParts], stats };
 }
