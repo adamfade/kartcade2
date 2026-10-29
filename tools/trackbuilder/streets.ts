@@ -24,7 +24,7 @@ type P2 = { x: number; y: number };
 type Ground = (x: number, z: number) => number | null;
 
 export interface StreetStats { stubs: number; signals: number; stopSigns: number; crosswalks: number; arrows: number; speedSigns: number; lamps: number; busStops: number }
-export interface StreetBuild { parts: MeshPart[]; stats: StreetStats; /** Side-street footprints (for keeping trees and buildings off them). */ stubs: { pts: P2[]; half: number }[]; /** Crosswalks across the route (distance along it). */ crossS: number[] }
+export interface StreetBuild { parts: MeshPart[]; stats: StreetStats; /** Side-street footprints (for keeping trees and buildings off them). */ stubs: { pts: P2[]; half: number }[]; /** Crosswalks across the route (distance along it). */ crossS: number[]; /** Street-lamp lens centres (for night lights). */ lamps: V3[] }
 
 interface Branch {
     way: OsmWay;
@@ -103,7 +103,7 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
     const lensRed = flat('st_lens_red', [200, 20, 16], [24, 2, 1], 0.6);
     const lensGreen = flat('st_lens_green', [20, 190, 120], [2, 22, 12], 0.6);
     const lampHeadM = flat('st_lamp_head', [96, 98, 100], undefined, 0.3);
-    const lampLensM = flat('st_lamp_lens', [255, 222, 170], [10, 8, 5], 0.4);
+    const lampLensM = flat('st_lamp_lens', [255, 222, 170], undefined, 0.4); // lit at night by CSP (ext_config)
     const backM = flat('st_sign_back', [128, 132, 136], undefined, 0.2);
     const sideRoadM = 'road';
     const meshes = new Map<string, Mesh>();
@@ -466,6 +466,7 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
         return { p: pp, i: q.i, lat };
     };
     const yOf = (p: P2, i: number, lat: number) => (Math.abs(lat) <= g.halfAt(i) + g.vergeReach(i, lat < 0 ? -1 : 1) ? g.surfaceAt(i, lat) : ground(p.x, p.y) ?? g.surfaceAt(i, lat));
+    const lamps: V3[] = [];
     for (const lp of points.filter((p) => p.tags.highway === 'street_lamp')) {
         const o = offRoad(lp, 1.2);
         if (!o) continue;
@@ -477,6 +478,7 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
         box(mesh('ST_LAMP_HEAD', lampHeadM), [tip[0], tip[1] - 0.2, tip[2]], toRoad, 0.35, 0.75, 0.2);
         const lc = (u: number, v: number): V3 => [tip[0] + toRoad[0] * u - toRoad[2] * v, tip[1] - 0.205, tip[2] + toRoad[2] * u + toRoad[0] * v];
         mesh('ST_LAMP_LENS', lampLensM).face([lc(-0.3, -0.12), lc(0.3, -0.12), lc(0.3, 0.12), lc(-0.3, 0.12)], [0, -1, 0], [[0, 0], [1, 0], [1, 1], [0, 1]]);
+        lamps.push(lc(0, 0));
         if (Math.abs(o.lat) - g.halfAt(o.i) < 8) box(hits(), base, toRoad, 0.35, 0.35, 3);
         stats.lamps++;
     }
@@ -495,5 +497,5 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
     const parts = [...meshes.values()].flatMap((m) => m.parts).filter((p) => p.indices.length);
     for (const p of parts) if (p.name.startsWith('PAINT_')) p.castShadows = false;
     void paintY;
-    return { parts, stats, stubs: stubFootprints, crossS: routeCrossS };
+    return { parts, stats, stubs: stubFootprints, crossS: routeCrossS, lamps };
 }

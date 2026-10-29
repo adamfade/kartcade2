@@ -12,6 +12,7 @@ import { OSM_VERSION, fetchOsm } from '../../../tools/trackbuilder/osm.ts';
 import type { OsmFeatures } from '../../../tools/trackbuilder/osm.ts';
 import { gunzipSync, gzipSync } from 'fflate';
 import { fetchSurfaces, pngsToSurface, surfaceToPngs } from '../../../tools/trackbuilder/lidar.ts';
+import { horizonUrls, planHorizon } from '../../../tools/trackbuilder/horizon.ts';
 import type { LazPerfModule, SurfaceMeta } from '../../../tools/trackbuilder/lidar.ts';
 import lazWasmUrl from 'laz-perf/lib/web/laz-perf.wasm?url';
 
@@ -54,6 +55,7 @@ export async function ensureSite(line: LatLon[], log: (m: string) => void): Prom
     if (existing) {
         await attachOsm(existing, siteId, line, log, true);
         await attachSurfaces(existing, siteId, line, log, true);
+        await attachHorizon(existing, siteId, log, true);
         return { site: existing, siteId, stored: true, fresh: false };
     }
 
@@ -99,6 +101,7 @@ export async function ensureSite(line: LatLon[], log: (m: string) => void): Prom
     }
     await attachOsm(site, siteId, line, log, stored);
     await attachSurfaces(site, siteId, line, log, stored);
+    await attachHorizon(site, siteId, log, stored);
     return { site, siteId, stored, fresh: true };
 }
 
@@ -175,6 +178,43 @@ function loadLazPerf(): Promise<LazPerfModule> {
  * as surface.png and class.png with a surface.json listing them. Sites saved before this get it on their next load;
  * when no point cloud covers the road (or the fetch fails) the build estimates heights as before.
  */
+/**
+ * The horizon: ~80 m elevation and ~20 m imagery for a 40 km square around the overview, stored as
+ * horizon/dem.png + horizon/rgb.jpg. Sites saved before this existed get it on their next load; a failed fetch
+ * just leaves the horizon out (retried next time).
+ */
+async function attachHorizon(site: SiteRasters, siteId: string, log: (m: string) => void, store: boolean) {
+    if (site.horizon?.dem || !site.overview) return;
+    const plan = planHorizon(site.overview);
+    const dir = `${ROOT}/${siteId}/horizon`;
+    try {
+        const [dem, rgb] = await Promise.all(['dem.png', 'rgb.jpg'].map((f) => getBytes(ref(storage, `${dir}/${f}`))));
+        const img = await decodeJpeg(rgb);
+        site.horizon = { ...plan, dem: pngToDem(new Uint8Array(dem), plan.bbox), rgb: { bbox: plan.bbox, width: img.width, height: img.height, rgba: img.data } };
+        return;
+    } catch (e) {
+        if ((e as { code?: string }).code !== 'storage/object-not-found') log(`Couldn't read the stored horizon (${(e as Error).message}); fetching it again`);
+    }
+    try {
+        log('Fetching the distant landscape (20 km around) from USGS');
+        const urls = horizonUrls(plan);
+        const [demBytes, rgbBytes] = await Promise.all([urls.dem, urls.rgb].map(async (u) => {
+            const r = await fetch(u);
+            if (!r.ok) throw new Error(`${new URL(u).host} answered ${r.status}`);
+            return r.arrayBuffer();
+        }));
+        const t = await decodeTiff(demBytes), img = await decodeJpeg(rgbBytes);
+        const dem = { bbox: plan.bbox, width: t.width, height: t.height, heights: t.data };
+        site.horizon = { ...plan, dem, rgb: { bbox: plan.bbox, width: img.width, height: img.height, rgba: img.data } };
+        if (store) await Promise.all([
+            uploadBytes(ref(storage, `${dir}/dem.png`), demToPng(dem), { contentType: 'image/png', cacheControl: 'public, max-age=31536000, immutable' }),
+            uploadBytes(ref(storage, `${dir}/rgb.jpg`), new Uint8Array(rgbBytes), { contentType: 'image/jpeg', cacheControl: 'public, max-age=31536000, immutable' }),
+        ]).catch((e) => log(`Couldn't save the horizon (${(e as { code?: string }).code ?? (e as Error).message})`));
+    } catch (e) {
+        log(`Distant landscape unavailable (${(e as Error).message}); building without it this time`);
+    }
+}
+
 async function attachSurfaces(site: SiteRasters, siteId: string, line: LatLon[], log: (m: string) => void, store: boolean) {
     if (site.cells.some((c) => c.surface)) return;
     const metaPath = `${ROOT}/${siteId}/surface.json`;

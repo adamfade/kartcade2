@@ -306,7 +306,9 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
     const enterGround = (s: number, lat = defaultLat) => {
         const v = view.current;
         const fog = three.current?.scene.fog as THREE.Fog | undefined;
-        if (fog) { fog.near = 300; fog.far = 2500; }
+        // With the horizon ring there is no world edge to hide: haze far hills instead.
+        const horizon = props.current.build.terrain.some((p) => p.name.startsWith('HORIZON'));
+        if (fog) { fog.near = horizon ? 1200 : 300; fog.far = horizon ? 18000 : 2500; }
         v.mode = 'ground'; v.s = s; v.lat = lat; v.yaw = helpers.current.heading(s); v.pitch = -0.03;
         setMode('ground'); setWhere(Math.round(s)); setGroundPrompt(false);
     };
@@ -354,7 +356,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
         const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
         sun.position.set(-0.5, 1, 0.35);
         scene.add(sun);
-        const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 20000);
+        const camera = new THREE.PerspectiveCamera(60, 1, 0.25, 45000);
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.maxPolarAngle = Math.PI * 0.495;

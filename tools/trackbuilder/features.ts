@@ -134,7 +134,7 @@ const BARN_COLOURS: [number, number, number][] = [[138, 48, 38], [150, 148, 140]
 const SHOP_COLOURS: [number, number, number][] = [[150, 84, 64], [176, 160, 132], [120, 66, 52], [196, 188, 170], [98, 104, 110], [140, 120, 96]];
 const METAL_COLOURS: [number, number, number][] = [[150, 152, 155], [70, 96, 74], [140, 52, 44]];
 
-export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures, ground: HeightSampler, book: MaterialBook, lib: MaterialLibrary | undefined, opts: FeatureOptions = {}): { parts: MeshPart[]; stats: FeatureStats; driveways: BuildingKit['driveways']; fronts: BuildingKit['fronts'] } {
+export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures, ground: HeightSampler, book: MaterialBook, lib: MaterialLibrary | undefined, opts: FeatureOptions = {}): { parts: MeshPart[]; stats: FeatureStats; driveways: BuildingKit['driveways']; fronts: BuildingKit['fronts']; lights: BuildingKit['lights'] } {
     const proj = cl.projection;
     const L = (p: { lat: number; lon: number }): P2 => proj.toLocal(p);
     const H = (p: P2) => ground(proj.toLatLon(p)) ?? 0;
@@ -701,5 +701,5 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
         }
     }
     stats.roofColours = roofPalette.length;
-    return { parts: [...parts, ...extraParts], stats, driveways: kit.driveways, fronts: kit.fronts };
+    return { parts: [...parts, ...extraParts], stats, driveways: kit.driveways, fronts: kit.fronts, lights: kit.lights };
 }

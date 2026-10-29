@@ -17,6 +17,7 @@ import { datumOffset, decodeLaz, fromMerc, pngsToSurface, rasterizeSurface, surf
 import type { SurfaceRaster } from '../lidar.ts';
 import { toPortable, fromPortable } from '../portable.ts';
 import { classifyGround } from '../ground.ts';
+import { planHorizon } from '../horizon.ts';
 import type { LatLon } from '../geo.ts';
 
 function walk(n: ReadNode, f: (n: ReadNode) => void) { f(n); n.children.forEach((c) => walk(c, f)); }
@@ -361,4 +362,40 @@ test('road surface: sealed cracks, manholes and drains on the asphalt, worn alph
     const paint = res.materials.find((m) => m.name === 'paint_white')!;
     assert.equal(paint.shader, 'ksPerPixelMultiMap_AT_NMDetail');
     assert.equal(paint.alphaTested, true);
+});
+
+test('night lights and horizon: lamp light series, window glow, tiling fix, a curved ring to 20 km', () => {
+    const { line, terrain, site } = valleyScene();
+    // A horizon raster: a gentle 300 m hill 10 km north, flat elsewhere at 60 m.
+    const plan = planHorizon(site.overview!);
+    const W = 256, heights = new Float32Array(W * W);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) heights[y * W + x] = 60 + 300 * Math.exp(-(((x - 128) / 20) ** 2 + ((y - 64) / 20) ** 2));
+    site.horizon = { ...plan, dem: { bbox: plan.bbox, width: W, height: W, heights }, rgb: { bbox: plan.bbox, width: 4, height: 4, rgba: new Uint8Array(64).fill(120) } };
+    site.osm!.buildings.push({ id: 77, ring: (() => { const lat0 = 45.36, lon0 = -122.62, mLon = 111_320 * Math.cos((lat0 * Math.PI) / 180), mLat = 111_120; const ll = (e: number, nn: number) => ({ lat: lat0 + nn / mLat, lon: lon0 + e / mLon }); return [ll(640, 14), ll(660, 14), ll(660, 30), ll(640, 30), ll(640, 14)]; })(), tags: { building: 'retail' } });
+    site.osm!.pois = [{ id: 78, at: { lat: 45.36 + 15 / 111_120, lon: -122.62 + 650 / (111_320 * Math.cos((45.36 * Math.PI) / 180)) }, tags: { shop: 'bakery', name: 'Sweet' } }];
+    const res = buildTrack({ name: 'Valley St', polyline: line, heightSampler: terrain, width: 7, site });
+    const ring = res.terrain.filter((p) => p.name.startsWith('HORIZON_'));
+    assert.ok(ring.length, 'horizon parts');
+    let far = 0, minY = Infinity;
+    for (const p of ring) for (let k = 0; k < p.positions.length; k += 3) {
+        const d = Math.hypot(p.positions[k] - 400, p.positions[k + 2]);
+        far = Math.max(far, d);
+        if (d > 18000) minY = Math.min(minY, p.positions[k + 1]);
+    }
+    assert.ok(far > 19000, `ring reaches ${far.toFixed(0)} m`);
+    assert.ok(minY < 60 - 20, `the earth curves away (${minY.toFixed(1)} m at 18+ km)`);
+    const ext = new TextDecoder().decode(res.files['valley_st/extension/ext_config.ini']);
+    assert.match(ext, /\[LIGHT_SERIES_STREET_LAMPS\][\s\S]*CONDITION = NightLights[\s\S]*POSITION_0 = /);
+    assert.match(ext, /\[MATERIAL_ADJUSTMENT_LAMP_LENSES\]/);
+    assert.match(ext, /\[SHADER_REPLACEMENT_TILING_FIX\][\s\S]*PROP_0 = ksAlphaRef, -193/);
+    assert.match(ext, /\[SHADER_REPLACEMENT_FAR_FOG\][\s\S]*MATERIALS = horizon/);
+    assert.match(ext, /\[LIGHT_SERIES_SHOP_WINDOWS\]/);
+    assert.match(ext, /\[MATERIAL_ADJUSTMENT_SHOP_GLASS\]/);
+    // Every POSITION line is three finite numbers.
+    for (const m of ext.matchAll(/POSITION_\d+ = (.*)/g)) assert.ok(m[1].split(',').map(Number).every(Number.isFinite), m[0]);
+    // The lamp lens is dark by day (no static glow): CSP lights it at night.
+    const lens = res.materials.find((m) => m.name === 'st_lamp_lens')!;
+    assert.deepEqual(lens.properties.find((p) => p.name === 'ksEmissive')!.c, [0, 0, 0]);
+    const k = readKn5(res.files['valley_st/valley_st.kn5']);
+    assert.equal(k.consumed, k.total);
 });

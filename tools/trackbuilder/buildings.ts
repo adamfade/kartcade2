@@ -181,6 +181,8 @@ export class BuildingKit {
     /** Garage doors (for driveways) and house fronts (for mailboxes), in plan. */
     readonly driveways: { door: P2; n: P2; width: number }[] = [];
     readonly fronts: { at: P2; n: P2 }[] = [];
+    /** Night lights: porch lights over front doors, shop windows spilling onto the sidewalk. */
+    readonly lights: { at: V3; dir: V3; kind: 'porch' | 'shop' }[] = [];
     private mats = new Map<string, string>();
     private book: MaterialBook;
     private lib: MaterialLibrary | undefined;
@@ -352,6 +354,7 @@ export class BuildingKit {
 
     private door(w: Wall, uc: number, y0: number, style: number) {
         const m = this.meshFor('BLDD', w.a, this.mat('door'));
+        this.lights.push({ at: this.pt(w, uc + 0.75, y0 + 2.2, 0.25), dir: [w.n.x * 0.3, -1, w.n.y * 0.3], kind: 'porch' });
         this.quad(m, w, uc - 0.48, uc + 0.48, y0, y0 + 2.1, 0.04, this.cell(style, 0, 4, 1));
         const trim = this.meshFor('BLDD', w.a, this.mat('trim'));
         this.slab(trim, w, uc - 0.62, uc + 0.62, y0 + 2.1, y0 + 2.26, 0, 0.09);
@@ -437,6 +440,7 @@ export class BuildingKit {
                 aw.double([P(u0, yTop, 0.02), P(u1, yTop, 0.02), P(u1, yLow, out), P(u0, yLow, out)], nrm, [[0, v1], [reps, v1], [reps, v0], [0, v0]]);
                 aw.double([P(u0, yLow, out), P(u1, yLow, out), P(u1, yLow - 0.25, out), P(u0, yLow - 0.25, out)], [w.n.x, 0, w.n.y], [[0, v1], [reps, v1], [reps, v0 + 0.05], [0, v0 + 0.05]]);
             }
+            this.lights.push({ at: this.pt(w, (u0 + u1) / 2, gl1 - 0.4, 0.5), dir: [w.n.x, -0.35, w.n.y], kind: 'shop' });
             this.stats.storefronts++;
         });
     }

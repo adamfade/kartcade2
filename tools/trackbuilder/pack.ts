@@ -6,7 +6,7 @@ import { buildCenterline, signedArea } from './route.ts';
 import { roadProfile } from './elevation.ts';
 import type { HeightSampler, Profile } from './elevation.ts';
 import { buildGeometry } from './mesh.ts';
-import type { MeshPart, TrackGeometry } from './mesh.ts';
+import type { MeshPart, TrackGeometry, V3 } from './mesh.ts';
 import { writeKn5 } from './kn5.ts';
 import { MaterialBook, entryFor, macroDetailMaterial, multilayerMaterial, paintMacro, photoMaterial, roadMacro, solidMacro } from './materials.ts';
 import type { MaterialLibrary } from './materials.ts';
@@ -20,6 +20,7 @@ import { levelBridges, matchRoad } from './roadinfo.ts';
 import type { BridgeStructure, RoadInfo } from './roadinfo.ts';
 import { buildBridges } from './bridge.ts';
 import { buildRoadside } from './roadside.ts';
+import { buildHorizon } from './horizon.ts';
 import { buildRoadSurface } from './roadsurface.ts';
 import type { RoadSurfaceStats } from './roadsurface.ts';
 import type { RoadsideStats } from './roadside.ts';
@@ -156,6 +157,20 @@ export interface ExtContext {
     ground: string[];
     /** A 'water' material is present (rivers, lakes). */
     water?: boolean;
+    /** Night lights: street-lamp lenses, porch lights and lit shop windows (world positions, AC axes). */
+    lamps?: V3[];
+    porch?: { at: V3; dir: V3 }[];
+    shops?: { at: V3; dir: V3 }[];
+    /** Materials that exist in the KN5 (adjustments are only written for these). */
+    materials?: string[];
+}
+
+const f3 = (v: ArrayLike<number>) => `${v[0].toFixed(2)}, ${v[1].toFixed(2)}, ${v[2].toFixed(2)}`;
+/** A CSP light series from explicit positions (and directions), switched by NightLights. */
+function lightSeries(name: string, pts: { at: V3; dir?: V3 }[], params: Record<string, string | number>): string[] {
+    if (!pts.length) return [];
+    return [`[LIGHT_SERIES_${name}]`, ...Object.entries({ CONDITION: 'NightLights', SHADOWS: 0, ...params }).map(([k, v]) => `${k} = ${v}`),
+        ...pts.flatMap((p, k) => [`POSITION_${k} = ${f3(p.at)}`, ...(p.dir ? [`DIRECTION_${k} = ${f3(p.dir)}`] : [])]), ''];
 }
 
 /** Custom Shaders Patch config: GrassFX on the grass, RainFX surface classes. Ignored without CSP. */
@@ -177,6 +192,24 @@ export function extConfig(ctx: ExtContext = { ground: [] }): string {
         '[GRASS_FX_ADJUSTMENT_AERIAL]', `MATERIALS = ${ctx.ground.join(', ')}`, 'USE_MULTILAYER_MASK = 1', 'MASK_R = A', 'MASK_G = C', 'MASK_B = C', 'MASK_A = B', '',
     );
     if (ctx.water) lines.push('[INCLUDE: common/materials_track.ini]', '', '[Material_Water]', 'Materials = water', 'Type = LAKE', '');
+    // Night: street lamps, porch lights and shop windows light up; lit windows, shop glass and signs glow.
+    lines.push(...lightSeries('STREET_LAMPS', (ctx.lamps ?? []).map((at) => ({ at })), { DIRECTION: '0, -1, 0', SPOT: 150, SPOT_SHARPNESS: 0.2, RANGE: 28, RANGE_GRADIENT_OFFSET: 0.2, COLOR: '1, 0.86, 0.68, 22', DIFFUSE_CONCENTRATION: 0.6, SPECULAR_MULT: 1, FADE_AT: 450, FADE_SMOOTH: 80 }));
+    lines.push(...lightSeries('PORCH_LIGHTS', ctx.porch ?? [], { SPOT: 140, SPOT_SHARPNESS: 0.3, RANGE: 7, COLOR: '1, 0.8, 0.55, 4', FADE_AT: 160, FADE_SMOOTH: 40 }));
+    lines.push(...lightSeries('SHOP_WINDOWS', ctx.shops ?? [], { SPOT: 160, SPOT_SHARPNESS: 0.1, RANGE: 10, COLOR: '1, 0.9, 0.75, 7', FADE_AT: 250, FADE_SMOOTH: 50 }));
+    const have = (names: string[]) => names.filter((n) => !ctx.materials || ctx.materials.some((m) => (n.endsWith('?') ? m.startsWith(n.slice(0, -1)) : m === n)));
+    const adjust = (name: string, mats: string[], value: string) => {
+        const m = have(mats);
+        if (m.length) lines.push(`[MATERIAL_ADJUSTMENT_${name}]`, `MATERIALS = ${m.join(', ')}`, 'CONDITION = NightLights', 'KEY_0 = ksEmissive', `VALUE_0 = ${value}`, 'VALUE_0_OFF = 0, 0, 0', '');
+    };
+    adjust('LAMP_LENSES', ['st_lamp_lens'], "'#ffe2b8', 30");
+    adjust('LIT_WINDOWS', ['bld_window_lit'], "'#ffd8a0', 3");
+    adjust('SHOP_GLASS', ['bld_shop_glass'], "'#fff0d8', 2.5");
+    adjust('SHOP_SIGNS', ['bld_sign_?'], "'#ffffff', 1.5");
+    // CSP's tiling fix on the photo-detail ground and road materials.
+    const tiling = have(['road', 'verge', 'terrain', 'shoulder', 'sidewalk', 'gutter', 'road_patch_dark', 'road_patch_light', ...ctx.ground]);
+    if (tiling.length) lines.push('[SHADER_REPLACEMENT_TILING_FIX]', `MATERIALS = ${tiling.join(', ')}`, 'PROP_0 = ksAlphaRef, -193', '');
+    // Big low-poly far terrain: per-pixel fog so distant hills fade evenly.
+    if (have(['horizon']).length) lines.push('[SHADER_REPLACEMENT_FAR_FOG]', 'MATERIALS = horizon', 'SHADER = ksPerPixel_ppfog', '');
     lines.push(
         '[RAIN_FX]',
         'PUDDLES_MATERIALS = road, road_patch_dark, road_patch_light',
@@ -285,6 +318,11 @@ export function buildTrack(input: BuildInput): BuildResult {
         terrain = [...sp.land, ...sp.water];
         if (sp.water.length) { hasWater = true; log('Adding rivers and lakes'); }
     }
+    // The horizon: coarse terrain and imagery out to ~20 km around the detailed square.
+    if (site?.horizon?.dem && site.overview && input.terrain !== false) {
+        const hz = buildHorizon(cl, site.horizon, site.overview.bbox, book);
+        if (hz.length) { terrain.push(...hz); log('Adding the distant landscape to the horizon'); }
+    }
     // Bridges: walkways, parapets, deck and structure.
     const bridgeBuild = road?.bridges.length ? buildBridges(cl, geometry, road.bridges, ground, book, input.library) : { parts: [], count: 0 };
     // Side streets and street furniture from OpenStreetMap.
@@ -301,13 +339,15 @@ export function buildTrack(input: BuildInput): BuildResult {
     let featureStats: FeatureStats = { buildings: 0, trees: 0, barriers: 0 };
     let roadside: MeshPart[] = [];
     let roadsideStats: RoadsideStats | null = null;
+    let roadsideLights: V3[] = [];
+    let featureLights: { at: V3; dir: V3; kind: 'porch' | 'shop' }[] = [];
     if (site?.osm) {
         const f = buildFeatures(cl, geometry, site.osm, sampler, book, input.library, { site, stubs: streetBuild?.stubs, facadePhotos: input.facadePhotos });
         features = f.parts; featureStats = f.stats;
         log(`Adding ${f.stats.buildings} buildings, ${f.stats.trees} trees and ${f.stats.barriers} barriers from OpenStreetMap`);
         // Utility poles and wires, hydrants, mailboxes, parked cars, driveways, kerb ramps.
         const rs = buildRoadside(cl, geometry, road, site.osm, ground, book, input.library, { site, crossS: streetBuild?.crossS, stubs: streetBuild?.stubs, driveways: f.driveways, fronts: f.fronts });
-        roadside = rs.parts; roadsideStats = rs.stats;
+        roadside = rs.parts; roadsideStats = rs.stats; roadsideLights = rs.lights; featureLights = f.lights;
         log(`Adding ${rs.stats.poles} utility poles, ${rs.stats.parkedCars + rs.stats.lotCars} parked cars, ${rs.stats.hydrants} hydrants, ${rs.stats.driveways} driveways`);
     }
     const textures = book.textures, materials = book.materials;
@@ -392,7 +432,11 @@ export function buildTrack(input: BuildInput): BuildResult {
         // AI spline left out until its format is confirmed against a file recorded in game (v7 crashed AC on load).
         ...((input.includeAi ?? INCLUDE_AI) ? { [`${id}/ai/fast_lane.ai`]: ai } : {}),
         [`${id}/data/surfaces.ini`]: enc.encode(surfacesIni()),
-        [`${id}/extension/ext_config.ini`]: enc.encode(extConfig({ ground: groundMats, water: hasWater })),
+        [`${id}/extension/ext_config.ini`]: enc.encode(extConfig({
+            ground: groundMats, water: hasWater, materials: materials.map((m) => m.name),
+            lamps: [...(streetBuild?.lamps ?? []), ...roadsideLights],
+            porch: featureLights.filter((l) => l.kind === 'porch'), shops: featureLights.filter((l) => l.kind === 'shop'),
+        })),
         [`${id}/data/cameras.ini`]: enc.encode(cameras),
         [`${id}/data/map.ini`]: enc.encode(mapIni),
         [`${id}/map.png`]: encodePNG(map),

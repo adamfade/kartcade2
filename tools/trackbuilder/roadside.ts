@@ -33,7 +33,7 @@ export interface RoadsideOptions {
     occupancy?: number;
 }
 
-export interface RoadsideStats { poles: number; lidarPoles: number; wires: number; hydrants: number; mailboxes: number; parkedCars: number; lotCars: number; driveways: number; ramps: number }
+export interface RoadsideStats { lamps: number; poles: number; lidarPoles: number; wires: number; hydrants: number; mailboxes: number; parkedCars: number; lotCars: number; driveways: number; ramps: number }
 
 function rng(seed: number) { let s = seed >>> 0 || 1; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
 function hash2(x: number, y: number) { let h = Math.imul(Math.round(x * 10) | 0, 73856093) ^ Math.imul(Math.round(y * 10) | 0, 19349663); h = Math.imul(h ^ (h >>> 13), 0x5bd1e995); return ((h ^ (h >>> 15)) >>> 0) / 4294967296; }
@@ -51,10 +51,11 @@ export function carAtlas(): Rgba {
 }
 const swatch = (row: number, col: number): [number, number][] => { const u = (col + 0.5) / 8, v = 1 - (row + 0.5) / 4; return [[u, v], [u, v], [u, v], [u, v]]; };
 
-export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo | null, osm: OsmFeatures | undefined, ground: Ground, book: MaterialBook, lib: MaterialLibrary | undefined, opts: RoadsideOptions = {}): { parts: MeshPart[]; stats: RoadsideStats } {
+export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo | null, osm: OsmFeatures | undefined, ground: Ground, book: MaterialBook, lib: MaterialLibrary | undefined, opts: RoadsideOptions = {}): { parts: MeshPart[]; stats: RoadsideStats; /** Street-lamp lens centres (night lights). */ lights: V3[] } {
     const proj = cl.projection, P = cl.points, n = P.length;
     const L = (p: { lat: number; lon: number }): P2 => proj.toLocal(p);
-    const stats: RoadsideStats = { poles: 0, lidarPoles: 0, wires: 0, hydrants: 0, mailboxes: 0, parkedCars: 0, lotCars: 0, driveways: 0, ramps: 0 };
+    const lights: V3[] = [];
+    const stats: RoadsideStats = { lamps: 0, poles: 0, lidarPoles: 0, wires: 0, hydrants: 0, mailboxes: 0, parkedCars: 0, lotCars: 0, driveways: 0, ramps: 0 };
     const occ = opts.occupancy ?? 0.6;
 
     // ------------------------------------------------ lookups
@@ -116,6 +117,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
     // ------------------------------------------------ utility poles
     interface Pole { p: P2; y: number; h: number; dir: P2; lidar: boolean; side: number; s: number }
     const poles: Pole[] = [];
+    const lampCands: { p: P2; h: number; q: { i: number; d: number; lat: number } }[] = [];
     const lampsAndSignals = (osm?.points ?? []).filter((q) => q.tags.highway === 'street_lamp' || q.tags.highway === 'traffic_signals').map((q) => L(q.at));
     const addPole = (p: P2, h: number, lidar: boolean) => {
         if (poles.some((q) => Math.hypot(q.p.x - p.x, q.p.y - p.y) < 6)) return;
@@ -135,7 +137,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         const pxW = (s.bbox.east - s.bbox.west) / W, pxH = (s.bbox.north - s.bbox.south) / Hh;
         for (let y = 2; y < Hh - 2; y++) for (let x = 2; x < W - 2; x++) {
             const v = s.above[y * W + x];
-            if (!(v >= 9.5 && v <= 17) || s.cls[y * W + x] === 17) continue; // lower ones are mostly street lights
+            if (!(v >= 6.5 && v <= 17) || s.cls[y * W + x] === 17) continue;
             let isMax = true, low = 0, ring = 0;
             for (let dy = -2; dy <= 2 && isMax; dy++) for (let dx = -2; dx <= 2; dx++) {
                 if (!dx && !dy) continue;
@@ -149,6 +151,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
             if (q.i < 0 || Math.abs(q.lat) > g.halfAt(q.i) + 18) continue;
             if (c.nir && c.rgb) { const ni = sampleImage(c.nir, ll), rr = sampleImage(c.rgb, ll); if (ni && rr && (ni[0] - rr[0]) / (ni[0] + rr[0] + 1) > 0.15) continue; }
             if (lampsAndSignals.some((l) => Math.hypot(l.x - p.x, l.y - p.y) < 5)) continue;
+            if (v < 9.5) { lampCands.push({ p, h: v, q }); continue; } // street-light height: a lamp, not a utility pole
             const before = poles.length;
             addPole(p, v + 0.3, true);
             if (poles.length > before) stats.lidarPoles++;
@@ -223,6 +226,38 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
     }
 
     for (const [a, b] of spans) span(a, b);
+
+    // ------------------------------------------------ street lights
+    // Cobra-head lamps where the lidar finds a lone 6.5 - 9.5 m pole by the kerb, and on some utility poles
+    // close to the road (as residential streets have them). Their lights switch on at night (ext_config).
+    const lampHead = flat('st_lamp_head', [96, 98, 100], 0.3, 40), lampLens = flat('st_lamp_lens', [255, 222, 170], 0.4, 40);
+    const lampAt: P2[] = [...lampsAndSignals];
+    const cobra = (base: P2, y: number, toRoad: P2, armY: number, withPole: boolean) => {
+        const m = mesh('RS_LAMPS', base, metalM);
+        if (withPole) post(m, [base.x, y - 0.3, base.y], 0.11, 0.08, armY + 0.5 - y, 8);
+        const tip: V3 = [base.x + toRoad.x * 1.8, armY + 0.25, base.y + toRoad.y * 1.8];
+        // Arm: a thin box from the pole to the tip.
+        const mid: V3 = [(base.x + tip[0]) / 2, armY, (base.y + tip[2]) / 2];
+        box(m, mid, [toRoad.x, 0, toRoad.y], 0.07, 1.9, 0.08);
+        box(mesh('RS_LAMPS', base, lampHead), [tip[0], tip[1] - 0.2, tip[2]], [toRoad.x, 0, toRoad.y], 0.32, 0.7, 0.18);
+        const lc = (u: number, v: number): V3 => [tip[0] + toRoad.x * u - toRoad.y * v, tip[1] - 0.205, tip[2] + toRoad.y * u + toRoad.x * v];
+        mesh('RS_LAMPS', base, lampLens).face([lc(-0.28, -0.11), lc(0.28, -0.11), lc(0.28, 0.11), lc(-0.28, 0.11)], [0, -1, 0], [[0, 0], [1, 0], [1, 1], [0, 1]]);
+        lights.push(lc(0, 0));
+        lampAt.push(base);
+        stats.lamps++;
+    };
+    for (const c of lampCands) {
+        if (c.q.i < 0 || Math.abs(c.q.lat) - g.halfAt(c.q.i) > 5 || lampAt.some((l) => Math.hypot(l.x - c.p.x, l.y - c.p.y) < 12)) continue;
+        if (poles.some((pl) => Math.hypot(pl.p.x - c.p.x, pl.p.y - c.p.y) < 8)) continue;
+        const r = right(c.q.i), sgn = Math.sign(c.q.lat || 1), toRoad = { x: -r.x * sgn, y: -r.y * sgn };
+        cobra(c.p, H(c.p), toRoad, H(c.p) + c.h - 0.3, true);
+    }
+    for (const pl of poles) {
+        const q = nearest(pl.p, 40);
+        if (q.i < 0 || Math.abs(q.lat) - g.halfAt(q.i) > 4 || hash2(pl.p.y, pl.p.x) > 0.45 || lampAt.some((l) => Math.hypot(l.x - pl.p.x, l.y - pl.p.y) < 20)) continue;
+        const r = right(q.i), sgn = Math.sign(q.lat || 1);
+        cobra(pl.p, pl.y, { x: -r.x * sgn, y: -r.y * sgn }, pl.y + pl.h - 4.6, false);
+    }
 
     // ------------------------------------------------ hydrants
     const hydrant = (p: P2) => {
@@ -390,7 +425,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         if (p.name.startsWith('RS_LOTCARS') || p.name.startsWith('RS_MAIL') || p.name.startsWith('RS_HYDRANTS') || p.name.startsWith('RS_INSUL')) p.lodOut = 600;
         else if (p.name.startsWith('RS_WIRES')) p.lodOut = 900;
     }
-    return { parts, stats };
+    return { parts, stats, lights };
 }
 
 function norm2(p: P2): P2 { const l = Math.hypot(p.x, p.y) || 1; return { x: p.x / l, y: p.y / l }; }

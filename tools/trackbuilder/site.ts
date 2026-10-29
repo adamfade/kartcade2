@@ -12,6 +12,7 @@ import { decodePNG, encodePNG } from './png.ts';
 import type { Rgba } from './dds.ts';
 
 export interface GeoBox { west: number; south: number; east: number; north: number }
+import type { HorizonRaster } from './horizon.ts';
 import type { OsmFeatures } from './osm.ts';
 import type { SurfaceRaster } from './lidar.ts';
 
@@ -31,6 +32,8 @@ export interface SiteRasters {
     sources: { elevation: string; imagery: string; fetched: string };
     /** OpenStreetMap buildings, woods, trees and barriers over the overview square (ODbL). */
     osm?: OsmFeatures;
+    /** Coarse elevation and imagery out to the horizon (~20 km), around the overview. */
+    horizon?: HorizonRaster;
 }
 
 export interface SitePlan {
