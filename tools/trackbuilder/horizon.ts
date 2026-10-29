@@ -7,6 +7,7 @@ import type { MeshPart } from './mesh.ts';
 import type { DemRaster, GeoBox, ImageRaster } from './site.ts';
 import { demUrl, naipUrl, sampleDem, sampleImage } from './site.ts';
 import type { MaterialBook } from './materials.ts';
+import { contentKey } from './materials.ts';
 import type { Rgba } from './dds.ts';
 
 export interface HorizonRaster { bbox: GeoBox; sizeM: number; dem?: DemRaster; rgb?: ImageRaster }
@@ -45,7 +46,8 @@ export function horizonTexture(h: HorizonRaster, N = 2048): Rgba {
 export function buildHorizon(cl: Centerline, h: HorizonRaster, inner: GeoBox, book: MaterialBook, opts: { spacingM?: number } = {}): MeshPart[] {
     if (!h.dem) return [];
     const proj = cl.projection;
-    const tex = book.image('horizon.dds', () => horizonTexture(h), { format: 'bc1' });
+    const hb = h.bbox, key = contentKey(`${hb.south.toFixed(5)},${hb.west.toFixed(5)},${hb.north.toFixed(5)},${hb.east.toFixed(5)},${h.rgb?.width ?? 0}`);
+    const tex = book.image(`horizon_${key}.dds`, () => horizonTexture(h), { format: 'bc1' });
     const mat = book.add({
         name: 'horizon', shader: 'ksPerPixel',
         properties: [{ name: 'ksAmbient', a: 0.45 }, { name: 'ksDiffuse', a: 0.5 }, { name: 'ksSpecular', a: 0 }, { name: 'ksSpecularEXP', a: 1 }, { name: 'ksEmissive', c: [0, 0, 0] }, { name: 'ksAlphaRef', a: 0 }],

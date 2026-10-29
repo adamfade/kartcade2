@@ -7,7 +7,7 @@
 
 import type { Rgba } from './dds.ts';
 import type { MaterialBook, MaterialLibrary } from './materials.ts';
-import { macroDetailMaterial } from './materials.ts';
+import { contentKey, macroDetailMaterial } from './materials.ts';
 import type { V3 } from './mesh.ts';
 import type { Mesh } from './elements.ts';
 import { drawText } from './textures.ts';
@@ -211,7 +211,7 @@ export class BuildingKit {
         else if (key === 'concrete') m = macroDetailMaterial(b, this.lib, { name: 'bld_step', role: 'concrete', macro: { key: 'bld_step_macro', image: () => macro([156, 152, 144]), sizeM: 4 } });
         else if (key.startsWith('sign:')) {
             const [, style, name] = key.split(':');
-            const id = `bld_sign_${this.mats.size}`;
+            const id = `bld_sign_${contentKey(`${style}:${name}`)}`;
             m = this.flat(id, b.image(`${id}.dds`, () => shopSignImage(name, Number(style)), { format: 'bc1' }), { spec: 0.1 });
         } else throw new Error(`unknown building material ${key}`);
         this.mats.set(key, m);

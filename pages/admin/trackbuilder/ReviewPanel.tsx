@@ -21,7 +21,7 @@ export interface FacadePhoto {
     s: number;
     point: { x: number; y: number; z: number };
     at: { lat: number; lon: number };
-    /** The photo, downscaled to 512 px, as a JPEG data URL (kept with the project). */
+    /** The photo, downscaled to 384 px, as a JPEG data URL (kept with the project). */
     dataUrl: string;
     label?: string;
 }
@@ -50,14 +50,14 @@ export const MAX_FACADE_PHOTOS = 6;
 const m = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)} km` : `${Math.round(v)} m`);
 const input = 'w-full bg-black/40 border border-white/10 rounded-md px-2 py-1 text-sm focus:outline-none focus:border-[#2D9E49]';
 
-/** Downscale a photo to fit 512 x 512 and return a JPEG data URL. */
+/** Downscale a photo to fit 384 x 384 and return a JPEG data URL (kept small: the project document is capped at 1 MB). */
 export async function photoToDataUrl(file: File): Promise<string> {
     const bmp = await createImageBitmap(file);
-    const k = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
+    const k = Math.min(1, 384 / Math.max(bmp.width, bmp.height)); // ~30-50 KB each, so six fit in the project
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
     c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.82);
+    return c.toDataURL('image/jpeg', 0.75);
 }
 
 /** A stored photo as a 512 x 512 RGBA image for the builder (stretched to the wall it covers). */

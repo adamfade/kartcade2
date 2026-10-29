@@ -398,7 +398,8 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
             const objs: THREE.Object3D[] = [];
             three.current?.base?.group.children.forEach((o) => objs.push(o));
             three.current?.scenery?.group.children.forEach((o) => objs.push(o));
-            const h = ray.intersectObjects(objs, false)[0];
+            // LOD-hidden meshes (far billboards, near models) can't be clicked.
+            const h = ray.intersectObjects(objs.filter((o) => o.visible), false)[0];
             return h ? h.point : null;
         };
         const onDown = (e: PointerEvent) => { down = { x: e.clientX, y: e.clientY, yaw: view.current.yaw, pitch: view.current.pitch }; };
@@ -534,7 +535,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
     // ---- review pins
     useEffect(() => {
         const t = three.current; if (!t) return;
-        t.pins.children.slice().forEach((c) => { t.pins.remove(c); (c as THREE.Mesh).geometry?.dispose(); });
+        t.pins.children.slice().forEach((c) => { t.pins.remove(c); (c as THREE.Mesh).geometry?.dispose(); ((c as THREE.Mesh).material as THREE.Material)?.dispose(); });
         for (const p of pins ?? []) {
             const colour = p.done ? 0x2d9e49 : p.active ? 0xf5b700 : 0xd42428;
             const m = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, transparent: true, opacity: 0.9 });
@@ -545,7 +546,8 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
             stick.renderOrder = head.renderOrder = 20;
             t.pins.add(stick, head);
         }
-    }, [pins]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [JSON.stringify(pins ?? [])]);
 
     const btn = 'px-3 py-1.5 rounded-lg text-xs font-medium bg-black/60 hover:bg-black/80 text-white flex items-center gap-1 backdrop-blur';
     return (

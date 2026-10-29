@@ -345,7 +345,7 @@ export function billboardCell(species: Species, pick: number): number {
 
 export interface PlacedTree { x: number; z: number; y: number; h: number; species: Species; seed: number; /** 3D model (near the road) or billboard only. */ model: boolean; distM: number }
 
-const CHUNK = 96;
+const CHUNK = 48; // small enough that a chunk of 3D trees never splits (models and billboards share LOD centres)
 const MODEL_OUT = 230, BILLBOARD_IN = 200;
 
 /**

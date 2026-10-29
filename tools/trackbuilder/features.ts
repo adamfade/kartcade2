@@ -18,7 +18,7 @@ import { sampleImage } from './site.ts';
 import type { SurfaceRaster } from './lidar.ts';
 import { laneSet, wayWidth } from './roadinfo.ts';
 import type { MaterialBook, MaterialLibrary } from './materials.ts';
-import { macroDetailMaterial, photoMaterial, tileNoise } from './materials.ts';
+import { contentKey, macroDetailMaterial, photoMaterial, tileNoise } from './materials.ts';
 import type { PlacedTree, Species } from './trees.ts';
 import { treeMeshes } from './trees.ts';
 import type { BuildingKind, Shop, Wall } from './buildings.ts';
@@ -255,7 +255,7 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
 
     // Businesses (OpenStreetMap shop / amenity / office nodes) go on the building they stand in or next to.
     const pois = (osm.pois ?? []).map((q) => ({ p: L(q.at), tags: q.tags }));
-    const photos = (opts.facadePhotos ?? []).map((ph, k) => ({ p: L(ph.at), tex: book.image(`facade_photo_${k}.dds`, () => ph.image, { format: 'bc1' }) }));
+    const photos = (opts.facadePhotos ?? []).map((ph, k) => ({ p: L(ph.at), tex: book.image(`facade_photo_${k}_${contentKey(ph.image.data)}.dds`, () => ph.image, { format: 'bc1' }) }));
     /** Nearest point on any road (route or mapped street) and the distance to it. */
     const nearestRoad = (p: P2): { x: number; y: number; d: number } => {
         const q = nearRoute(p, 200);

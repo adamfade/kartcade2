@@ -399,6 +399,14 @@ export function paintMacro(rgb: [number, number, number], seed: number): Rgba {
     return { width: size, height: size, data };
 }
 
+/** A short content hash for texture names (FNV-1a over a sample of the bytes or a string). */
+export function contentKey(x: ArrayLike<number> | string): string {
+    let h = 2166136261;
+    if (typeof x === 'string') for (let i = 0; i < x.length; i++) { h ^= x.charCodeAt(i); h = Math.imul(h, 16777619); }
+    else { const step = Math.max(1, Math.floor(x.length / 4096)); for (let i = 0; i < x.length; i += step) { h ^= x[i]; h = Math.imul(h, 16777619); } h ^= x.length; h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+}
+
 /** A four-layer ground material: a macro colour, a mask choosing between four photo-scanned details. */
 export interface MultilayerSpec {
     name: string;

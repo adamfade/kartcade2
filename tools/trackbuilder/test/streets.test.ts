@@ -16,7 +16,7 @@ import type { ReadNode } from './kn5Reader.ts';
 import { datumOffset, decodeLaz, fromMerc, pngsToSurface, rasterizeSurface, surfaceToPngs, toMerc } from '../lidar.ts';
 import type { SurfaceRaster } from '../lidar.ts';
 import { toPortable, fromPortable } from '../portable.ts';
-import { classifyGround } from '../ground.ts';
+import { classifyGround, groundMask, siteRegions } from '../ground.ts';
 import { planHorizon } from '../horizon.ts';
 import type { LatLon } from '../geo.ts';
 
@@ -300,6 +300,9 @@ test('ground, water and roadside: multilayer aerial ground, river, kerbs, poles 
     assert.ok(aerial.length && aerial.every((m) => m.shader === 'ksMultilayer' && m.textures.length === 6));
     const mask = res.textures.find((t) => t.name.startsWith('aerialmask_'));
     assert.ok(mask, 'mask texture');
+    // Every mask texel's four weights sum to exactly 255 (no channel wraps on mixed-class edges).
+    const mk = groundMask(siteRegions(site)[0], site, res.centerline, res.geometry, 256);
+    for (let i = 0; i < mk.data.length; i += 4) assert.equal(mk.data[i] + mk.data[i + 1] + mk.data[i + 2] + mk.data[i + 3], 255);
     // Water mesh in the valley.
     assert.ok(res.terrain.some((p) => p.name.startsWith('WATER_') && p.material === 'water'));
     const ext = new TextDecoder().decode(res.files['valley_st/extension/ext_config.ini']);

@@ -558,7 +558,12 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                         pendingPhoto={pendingPhoto} cancelPhoto={() => setPendingPhoto(null)} activeId={activeNote} setActiveId={setActiveNote}
                         onPhotoChosen={async (f) => {
                             if (!pendingPhoto) return;
-                            try { const dataUrl = await photoToDataUrl(f); setPhotos([...photos, { id: elementId(), ...pendingPhoto, dataUrl, label: f.name }]); setPendingPhoto(null); setReviewTool(null); }
+                            try {
+                                const dataUrl = await photoToDataUrl(f);
+                                const total = photos.reduce((n, p) => n + p.dataUrl.length, 0) + dataUrl.length;
+                                if (total > 500_000) { setError('That would make the saved project too big. Remove a facade photo first.'); return; }
+                                setPhotos([...photos, { id: elementId(), ...pendingPhoto, dataUrl, label: f.name }]); setPendingPhoto(null); setReviewTool(null);
+                            }
                             catch (e) { setError(`Couldn't read that photo (${(e as Error).message})`); }
                         }}
                         onView={(s, look) => setGoTo({ s: base.centerline.closed ? s - 25 : Math.max(0, s - 25), nonce: Date.now(), look })}

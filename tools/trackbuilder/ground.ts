@@ -212,9 +212,9 @@ export function groundMask(region: GroundRegion, site: SiteRasters, cl: Centerli
             w[cls[y * N + x]] += dx === 0 && dy === 0 ? 4 : dx === 0 || dy === 0 ? 2 : 1;
         }
         const k = (py * N + px) * 4;
-        let acc = 0;
-        for (let c = 0; c < 3; c++) { data[k + c] = Math.round((w[c] / 16) * 255); acc += data[k + c]; }
-        data[k + 3] = 255 - acc;
+        // Round cumulatively so the four channels always sum to exactly 255 (no channel can wrap).
+        let prev = 0, cum = 0;
+        for (let c = 0; c < 4; c++) { cum += w[c]; const edge = Math.round((cum / 16) * 255); data[k + c] = edge - prev; prev = edge; }
     }
     return { width: N, height: N, data };
 }

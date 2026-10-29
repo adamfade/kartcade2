@@ -195,7 +195,12 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         let prev: Pole | null = null;
         for (const p of pts) {
             const pl = poles.find((q) => Math.hypot(q.p.x - p.x, q.p.y - p.y) < 3) ?? null;
-            if (pl && prev && Math.hypot(pl.p.x - prev.p.x, pl.p.y - prev.p.y) < 90) join(prev, pl);
+            if (pl && prev && Math.hypot(pl.p.x - prev.p.x, pl.p.y - prev.p.y) < 90) {
+                // Crossarms square to the wires they carry.
+                const d = norm2({ x: pl.p.x - prev.p.x, y: pl.p.y - prev.p.y });
+                pl.dir = d; if (!wired.has(prev)) prev.dir = d;
+                join(prev, pl);
+            }
             prev = pl;
         }
     }
@@ -250,7 +255,11 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         if (c.q.i < 0 || Math.abs(c.q.lat) - g.halfAt(c.q.i) > 5 || lampAt.some((l) => Math.hypot(l.x - c.p.x, l.y - c.p.y) < 12)) continue;
         if (poles.some((pl) => Math.hypot(pl.p.x - c.p.x, pl.p.y - c.p.y) < 8)) continue;
         const r = right(c.q.i), sgn = Math.sign(c.q.lat || 1), toRoad = { x: -r.x * sgn, y: -r.y * sgn };
-        cobra(c.p, H(c.p), toRoad, H(c.p) + c.h - 0.3, true);
+        // The lidar peak is the lamp head, which hangs over the kerb: stand the pole behind the kerb, 1.8 m back.
+        const h = g.halfAt(c.q.i), poleLat = sgn * Math.max(Math.abs(c.q.lat) + 1.8, h + 0.8);
+        const base = at(c.q.i, poleLat);
+        if (onStub(base, 0.5)) continue;
+        cobra(base, H(base), toRoad, H(base) + c.h - 0.3, true);
     }
     for (const pl of poles) {
         const q = nearest(pl.p, 40);
@@ -270,7 +279,14 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         stats.hydrants++;
     };
     const mappedHydrants = (osm?.points ?? []).filter((q) => q.tags.emergency === 'fire_hydrant').map((q) => L(q.at));
-    mappedHydrants.forEach(hydrant);
+    for (const h0 of mappedHydrants) {
+        // Mapped at the kerb, but our asphalt is an estimate: never on it (push to the back of the kerb), never on a side street.
+        const q = nearest(h0, 40);
+        let p = h0;
+        if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + 0.6) { const side = q.lat < 0 ? -1 : 1; p = at(q.i, side * (g.halfAt(q.i) + Math.max(0.6, Math.min(1.6, g.vergeReach(q.i, side) - 0.3)))); }
+        if (onStub(p, 0.5)) continue;
+        hydrant(p);
+    }
     if (!mappedHydrants.length && road) {
         // Unmapped: one every ~140 m along town streets, at the back of the sidewalk, alternating sides.
         let side: -1 | 1 = 1;

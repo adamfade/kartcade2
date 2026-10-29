@@ -69,7 +69,7 @@ export function buildRoadSurface(cl: Centerline, g: TrackGeometry, road: RoadInf
     const asphalt = entryFor(lib, 'asphalt').mean;
     const patchMat = (k: 'dark' | 'light') => macroDetailMaterial(book, lib, {
         name: `road_patch_${k}`, role: 'asphalt', specular: 0.2, specularExp: 30, reflection: 0.12,
-        macro: { key: `road_patch_${k}_macro`, image: () => solidMacro(asphalt.map((c) => c * (k === 'dark' ? 0.78 : 1.16)) as [number, number, number], 128, 0.12, k === 'dark' ? 41 : 43), sizeM: 8 },
+        macro: { key: `road_patch_${k}_macro_${asphalt.map(Math.round).join('_')}`, image: () => solidMacro(asphalt.map((c) => c * (k === 'dark' ? 0.78 : 1.16)) as [number, number, number], 128, 0.12, k === 'dark' ? 41 : 43), sizeM: 8 },
     });
     const flat = (name: string, rgb: number[], spec: number, exp: number) => {
         if (book.has(name)) return name;
@@ -106,7 +106,7 @@ export function buildRoadSurface(cl: Centerline, g: TrackGeometry, road: RoadInf
     const cells = (site?.cells ?? []).filter((c) => c.rgb);
     if (cells.length) {
         const DS = 0.5, rows = Math.floor(cl.length / DS);
-        const maxHalf = Math.max(...Array.from({ length: n }, (_, i) => g.halfAt(i)));
+        let maxHalf = 0; for (let i = 0; i < n; i++) maxHalf = Math.max(maxHalf, g.halfAt(i));
         const cols = Math.ceil((2 * maxHalf) / DS);
         const lum = new Float32Array(rows * cols).fill(NaN);
         const proj = cl.projection;
@@ -171,7 +171,7 @@ export function buildRoadSurface(cl: Centerline, g: TrackGeometry, road: RoadInf
     }
 
     // ------------------------------------------------ crack sealant
-    const sealM = flat('road_sealant', [20, 20, 22], 0.5, 60);
+    const sealM = flat('road_sealant', [30, 30, 32], 0.5, 60);
     /** A meandering sealant line from (s, lat) along direction (ds, dl) for len metres. */
     const crack = (s: number, lat: number, ds: number, dl: number, len: number, w: number) => {
         const N = Math.max(2, Math.round(len / 0.35));
@@ -180,9 +180,10 @@ export function buildRoadSurface(cl: Centerline, g: TrackGeometry, road: RoadInf
         let cs = s, cl2 = lat;
         for (let k = 0; k <= N; k++) {
             pts.push([cs, cl2]);
-            a += (rand() - 0.5) * 0.5;
+            // Real cracks wander a little but keep their line: small turns, pulled back towards the base direction.
             const base = Math.atan2(dl, ds);
-            a = base + Math.max(-0.5, Math.min(0.5, a - base));
+            a += (rand() - 0.5) * 0.35 - (a - base) * 0.35;
+            a = base + Math.max(-0.25, Math.min(0.25, a - base));
             cs += Math.cos(a) * (len / N); cl2 += Math.sin(a) * (len / N);
         }
         for (let k = 0; k < N; k++) {
@@ -199,7 +200,7 @@ export function buildRoadSurface(cl: Centerline, g: TrackGeometry, road: RoadInf
         const i = idxAt(sM), h = g.halfAt(i);
         if (!g.onBridge(i)) {
             // Transverse: across most of the width; on older rural roads, more of them.
-            if (rand() < (urban(i) ? 0.35 : 0.6)) crack(sM, -h + 0.3 + rand() * 0.6, 0.05, 1, 2 * h - 1.2 - rand() * 2, 0.05 + rand() * 0.03);
+            if (rand() < (urban(i) ? 0.35 : 0.6)) { const len = (2 * h - 0.8) * (0.4 + rand() * 0.6); crack(sM, -h + 0.3 + rand() * (2 * h - 0.8 - len), 0.05, 1, len, 0.04 + rand() * 0.03); }
             // Longitudinal: the paving joint near the centre and inside the edges, in runs.
             if (rand() < 0.3) crack(sM, (rand() - 0.5) * 0.6, 1, 0.02, 4 + rand() * 10, 0.05);
             if (rand() < 0.2) crack(sM, (rand() < 0.5 ? -1 : 1) * (h - 0.6), 1, 0, 3 + rand() * 8, 0.05);
