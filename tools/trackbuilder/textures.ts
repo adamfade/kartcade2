@@ -132,7 +132,7 @@ export function signText(t: string, max = 16): string {
 }
 
 /** Draw text centred in a box, as large as fits. */
-function drawText(img: { width: number; height: number; data: Uint8Array }, text: string, box: { x: number; y: number; w: number; h: number }, rgb: [number, number, number]) {
+export function drawText(img: { width: number; height: number; data: Uint8Array }, text: string, box: { x: number; y: number; w: number; h: number }, rgb: [number, number, number]) {
     const t = signText(text, 40);
     if (!t) return;
     const cols = t.length * 6 - 1; // 5 px glyph + 1 px gap
@@ -188,4 +188,79 @@ export function bannerTexture(text: string): Uint8Array {
     }
     drawText(img, text, { x: 210, y: 18, w: W - 420, h: H - 36 }, [255, 255, 255]);
     return encodePNG(img);
+}
+
+// ---------------------------------------------------------------- traffic signs (RGBA, MUTCD-style colours)
+
+const px = (img: RGBAImage, x: number, y: number, c: [number, number, number], a = 255) => {
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return;
+    const i = (y * img.width + x) * 4; img.data[i] = c[0]; img.data[i + 1] = c[1]; img.data[i + 2] = c[2]; img.data[i + 3] = a;
+};
+
+/** Fill transparent texels with the nearest edge colour (darkened) so filtering at cut-out edges stays clean. */
+function bleed(img: RGBAImage, rgb: [number, number, number]) {
+    for (let i = 0; i < img.width * img.height; i++) if (img.data[i * 4 + 3] === 0) { img.data[i * 4] = rgb[0]; img.data[i * 4 + 1] = rgb[1]; img.data[i * 4 + 2] = rgb[2]; }
+}
+
+/** R1-1 STOP: red octagon, white border and legend; transparent outside (alpha-tested). */
+export function stopSignImage(): RGBAImage {
+    const N = 256, img = makeImage(N, N, [0, 0, 0, 0]);
+    const red: [number, number, number] = [176, 22, 30], white: [number, number, number] = [245, 245, 245];
+    const inOct = (x: number, y: number, r: number) => { const u = Math.abs(x - N / 2), v = Math.abs(y - N / 2); return u <= r && v <= r && u + v <= r * 1.414; };
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        if (!inOct(x + 0.5, y + 0.5, 124)) continue;
+        px(img, x, y, inOct(x + 0.5, y + 0.5, 112) && !inOct(x + 0.5, y + 0.5, 106) ? white : inOct(x + 0.5, y + 0.5, 112) ? red : white);
+    }
+    drawText(img, 'STOP', { x: 36, y: 92, w: N - 72, h: 72 }, white);
+    bleed(img, [120, 20, 24]);
+    return img;
+}
+
+/** R1-2 YIELD: downward white triangle with a wide red border. */
+export function yieldSignImage(): RGBAImage {
+    const N = 256, img = makeImage(N, N, [0, 0, 0, 0]);
+    const red: [number, number, number] = [176, 22, 30], white: [number, number, number] = [245, 245, 245];
+    const inTri = (x: number, y: number, m: number) => { const top = 20 + m, bot = 236 - m * 1.6; if (y < top || y > bot) return false; const half = ((bot - y) / (bot - top)) * (118 - m * 1.7); return Math.abs(x - N / 2) <= half; };
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (inTri(x, y, 0)) px(img, x, y, inTri(x, y, 30) ? white : red);
+    drawText(img, 'YIELD', { x: 80, y: 66, w: 96, h: 30 }, red);
+    bleed(img, [120, 20, 24]);
+    return img;
+}
+
+/** R2-1 SPEED LIMIT: white, black border. 256 x 256 texture for a 4:5 sign (stretched slightly upright in use). */
+export function speedLimitImage(mph: number): RGBAImage {
+    const W = 256, H = 256, img = makeImage(W, H, [245, 245, 245, 255]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const b = Math.min(x, y, W - 1 - x, H - 1 - y); if (b >= 6 && b < 13) px(img, x, y, [18, 18, 20]); }
+    drawText(img, 'SPEED', { x: 30, y: 20, w: W - 60, h: 38 }, [18, 18, 20]);
+    drawText(img, 'LIMIT', { x: 30, y: 64, w: W - 60, h: 38 }, [18, 18, 20]);
+    drawText(img, String(Math.round(mph)), { x: 34, y: 116, w: W - 68, h: 116 }, [18, 18, 20]);
+    return img;
+}
+
+/** D3-1 street name blade for a mast arm: white on green, 4:1. */
+export function streetNameImage(name: string): RGBAImage {
+    const W = 512, H = 128, img = makeImage(W, H, [0, 102, 64, 255]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const b = Math.min(x, y, W - 1 - x, H - 1 - y); if (b >= 5 && b < 10) px(img, x, y, [240, 240, 240]); }
+    drawText(img, abbreviateStreet(name), { x: 22, y: 24, w: W - 44, h: H - 48 }, [240, 240, 240]);
+    return img;
+}
+
+/** Street names as US blades print them: Street -> ST, Avenue -> AVE, ... */
+export function abbreviateStreet(name: string): string {
+    const map: Record<string, string> = { street: 'ST', avenue: 'AVE', road: 'RD', drive: 'DR', boulevard: 'BLVD', lane: 'LN', court: 'CT', place: 'PL', highway: 'HWY', parkway: 'PKWY', terrace: 'TER', way: 'WAY', circle: 'CIR', north: 'N', south: 'S', east: 'E', west: 'W' };
+    return name.split(/\s+/).map((w) => map[w.toLowerCase()] ?? w).join(' ');
+}
+
+/** Transit stop plate (1:2): white with a blue band. */
+export function busStopImage(): RGBAImage {
+    const W = 128, H = 256, img = makeImage(W, H, [245, 245, 245, 255]);
+    for (let y = 0; y < 84; y++) for (let x = 0; x < W; x++) px(img, x, y, [0, 70, 150]);
+    drawText(img, 'BUS', { x: 14, y: 14, w: W - 28, h: 56 }, [245, 245, 245]);
+    drawText(img, 'STOP', { x: 14, y: 116, w: W - 28, h: 50 }, [18, 18, 20]);
+    return img;
+}
+
+/** Plain colour texture (RGBA) for steel, housings and lenses. */
+export function flatImage(rgb: [number, number, number], size = 8): RGBAImage {
+    return makeImage(size, size, [rgb[0], rgb[1], rgb[2], 255]);
 }

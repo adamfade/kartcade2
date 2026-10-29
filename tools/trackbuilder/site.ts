@@ -13,11 +13,16 @@ import type { Rgba } from './dds.ts';
 
 export interface GeoBox { west: number; south: number; east: number; north: number }
 import type { OsmFeatures } from './osm.ts';
+import type { SurfaceRaster } from './lidar.ts';
 
 export interface DemRaster { bbox: GeoBox; width: number; height: number; heights: Float32Array }
 export interface ImageRaster { bbox: GeoBox; width: number; height: number; rgba: Uint8Array }
 
-export interface SiteCell { key: string; bbox: GeoBox; sizeM: number; dem?: DemRaster; rgb?: ImageRaster; nir?: ImageRaster }
+export interface SiteCell {
+    key: string; bbox: GeoBox; sizeM: number; dem?: DemRaster; rgb?: ImageRaster; nir?: ImageRaster;
+    /** Lidar surface along the corridor (height above ground of the highest return, and its class). */
+    surface?: SurfaceRaster;
+}
 
 export interface SiteRasters {
     version: 1;

@@ -2,6 +2,8 @@
 // Front faces wind clockwise seen from above, so normals = cross(b - a, c - a) point up.
 
 import type { Centerline } from './route.ts';
+import type { LaneSet } from './roadinfo.ts';
+import { laneGeometry } from './roadinfo.ts';
 
 export type V3 = [number, number, number];
 
@@ -43,7 +45,18 @@ export interface MeshOptions {
      * banks) with dense columns, and the boundary walls become invisible (the terrain is the visual edge).
      */
     lidar?: boolean;
+    /** Asphalt width per centreline sample (from the OSM lanes); overrides `width`, which stays the default. */
+    widths?: ArrayLike<number>;
+    /** Lane layout per sample, for lane lines, centre turn lanes and kerbside lanes. */
+    lanes?: LaneSet[];
+    /** Sample ranges on bridges: no grass or gravel there (the bridge builder adds walkways and parapets). */
+    bridges?: { i0: number; i1: number }[];
+    /** Per sample: an urban street with sidewalks, so the shoulder is a raised concrete walk, not gravel. */
+    urban?: ArrayLike<boolean | number>;
 }
+
+/** Bridge walkway (kerb + sidewalk) width beyond the asphalt; parapets stand at its outer edge. */
+export const BRIDGE_WALK = 2.0;
 
 export interface TrackGeometry {
     parts: MeshPart[];
@@ -54,7 +67,12 @@ export interface TrackGeometry {
     surfaceAt: (i: number, lateral: number) => number;
     /** How far the verge reaches beyond the asphalt edge on one side (walls stand here). */
     vergeReach: (i: number, side: -1 | 1) => number;
+    /** Widest asphalt width along the road. */
     width: number;
+    /** Half the asphalt width at centreline index i. */
+    halfAt: (i: number) => number;
+    /** Whether sample i is on a bridge. */
+    onBridge: (i: number) => boolean;
 }
 
 const MAX_VERTS = 60000;
@@ -175,7 +193,13 @@ function clearanceToOtherSections(cl: Centerline, maxReach: number): { left: num
 }
 
 export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptions): TrackGeometry {
-    const W = opts.width, half = W / 2;
+    const n0 = cl.points.length;
+    const hwArr = new Float64Array(n0);
+    for (let i = 0; i < n0; i++) hwArr[i] = (opts.widths ? opts.widths[i] : opts.width) / 2;
+    const hw = (i: number) => hwArr[i];
+    let maxHalf = 0; for (let i = 0; i < n0; i++) maxHalf = Math.max(maxHalf, hwArr[i]);
+    const bridgeRow = new Uint8Array(n0);
+    for (const b of opts.bridges ?? []) for (let i = Math.max(0, b.i0); i <= Math.min(n0 - 1, b.i1); i++) bridgeRow[i] = 1;
     const shoulder = opts.shoulder ?? 1;
     const verge = opts.verge ?? 40;
     const crown = opts.crown ?? 0.02;
@@ -192,41 +216,52 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
 
     // Inner-side reach is limited by the turn radius so the verge never folds over itself, and by the
     // distance to other parts of the road so verges from neighbouring sections never overlap.
-    const other = clearanceToOtherSections(cl, half + shoulder + verge);
+    const other = clearanceToOtherSections(cl, maxHalf + shoulder + verge);
     const reach = (i: number, side: -1 | 1) => {
         let r = verge;
         for (let k = -15; k <= 15; k++) {
             const j = i + k; if (!closed && (j < 0 || j >= n)) continue;
             const kk = cl.curvature[ix(j)];
             // Turning left (kk>0) the inside is the left side (-1).
-            if ((kk > 0 && side === -1) || (kk < 0 && side === 1)) r = Math.min(r, 0.8 / Math.abs(kk) - half - shoulder);
+            if ((kk > 0 && side === -1) || (kk < 0 && side === 1)) r = Math.min(r, 0.8 / Math.abs(kk) - hw(i) - shoulder);
         }
         const o = (side === -1 ? other.left : other.right)[i];
-        if (Number.isFinite(o)) r = Math.min(r, o - half - shoulder - 0.5);
+        if (Number.isFinite(o)) r = Math.min(r, o - hw(i) - shoulder - 0.5);
         return Math.max(0.5, r);
     };
 
     const right = (i: number) => ({ x: cl.tangents[i].y, y: -cl.tangents[i].x });
     // Road surface height at lateral offset (negative = left of centre): crown, then bank into the turn.
-    const surf = (i: number, lat: number) => heights[i] - crown * Math.abs(Math.max(-half, Math.min(half, lat))) - bank[i] * Math.max(-half, Math.min(half, lat));
+    const surf = (i: number, lat: number) => { const h = hw(i), l = Math.max(-h, Math.min(h, lat)); return heights[i] - crown * Math.abs(l) - bank[i] * l; };
     const at = (i: number, lat: number, y: number): V3 => {
         const r = right(i);
         return [cl.points[i].x + r.x * lat, y, cl.points[i].y + r.y * lat];
     };
 
     // Road: five columns across.
-    const roadCols = [-half, -half / 2, 0, half / 2, half];
-    const roadRows = Array.from({ length: rowCount }, (_, i) => roadCols.map((lat) => at(ix(i), lat, surf(ix(i), lat))));
+    const roadCols = (i: number) => { const h = hw(i); return [-h, -h / 2, 0, h / 2, h]; };
+    const roadRows = Array.from({ length: rowCount }, (_, i) => roadCols(ix(i)).map((lat) => at(ix(i), lat, surf(ix(i), lat))));
     const tangent3 = (i: number): V3 => { const r = right(ix(i)); return [r.x, 0, r.y]; };
-    const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [0.5 + roadCols[j] / MACRO_M.road, sRow(i) / MACRO_M.road], tangent3);
+    const parts: MeshPart[] = gridParts('1ROAD', 'road', roadRows, (i, j) => [0.5 + roadCols(ix(i))[j] / MACRO_M.road, sRow(i) / MACRO_M.road], tangent3);
 
     // Grass both sides: from the road edge outward, blending into the ground.
     // prof[0] = left, prof[1] = right: offsets beyond the asphalt edge and their heights, per row.
     const prof: { offs: number[]; ys: number[] }[][] = [new Array(n), new Array(n)];
+    const steps = opts.lidar ? [0, 0, 0.8, 1.8, 3, 5, 8, 12, 18, 26, 36] : [0, 0, 3, 10, 22];
+    const urbanRow = (i: number) => !!opts.urban?.[i];
     const sideRow = (i: number, side: -1 | 1) => {
+        const half = hw(i);
         const edge = surf(i, side * half);
+        if (bridgeRow[i]) {
+            // On a bridge the "verge" is the walkway: kerb up 0.15 m, then flat to the parapet.
+            const offs = steps.map((_, k) => (k === 0 ? 0 : k === 1 ? 0.25 : 0.25 + ((BRIDGE_WALK - 0.25) * (k - 1)) / (steps.length - 1)));
+            offs.push(BRIDGE_WALK);
+            const ys = offs.map((_, k) => (k === 0 ? edge : edge + 0.15));
+            prof[side === -1 ? 0 : 1][i] = { offs: offs.slice(), ys };
+            const pts = offs.map((d, k) => { const p = at(i, side * (half + d), 0); p[1] = ys[k]; return p; });
+            return side === -1 ? pts.reverse() : pts;
+        }
         const lim = reach(i, side);
-        const steps = opts.lidar ? [0, 0, 0.8, 1.8, 3, 5, 8, 12, 18, 26, 36] : [0, 0, 3, 10, 22];
         const offs = [...steps.map((d, k) => (k === 0 ? 0 : shoulder + d)), shoulder + verge].map((d) => Math.min(d, lim + shoulder));
         // Keep offsets strictly increasing even when clamped.
         for (let k = 1; k < offs.length; k++) offs[k] = Math.max(offs[k], offs[k - 1] + 0.05);
@@ -234,13 +269,17 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         const pts = offs.map((d, k) => {
             const lat = side * (half + d);
             const p = at(i, lat, 0);
-            let y = edge - (k === 0 ? 0 : 0.03); // shoulder a touch below the asphalt
+            // Shoulder a touch below the asphalt; on urban streets a sidewalk rising to kerb height.
+            const walk = urbanRow(i);
+            const shoulderY = walk ? edge + 0.15 : edge - 0.03;
+            let y = k === 0 ? edge : shoulderY;
             if (k >= 2 && opts.ground) {
                 const g = opts.ground(p[0], p[2]);
                 // Lidar: the real ground (it already contains the road bench, ditches and cuttings), eased in
                 // over 1.5 m from the shoulder. Coarse elevation: a long blend hides its 10 m cells.
+                const from = walk ? shoulderY - 0.02 : edge - 0.05;
                 if (g != null && Number.isFinite(g)) y = opts.lidar
-                    ? (edge - 0.05) + (g - (edge - 0.05)) * smoothstep((d - shoulder) / 1.5)
+                    ? from + (g - from) * smoothstep((d - shoulder) / 1.5)
                     : edge + (g - edge) * smoothstep((d - shoulder) / (verge * 0.6));
             }
             p[1] = y;
@@ -259,13 +298,45 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     const worldUv = (rows: V3[][]) => (i: number, j: number): [number, number] => [rows[i][j][0] / MACRO_M.verge, rows[i][j][2] / MACRO_M.verge];
     const Ls = L.map((r) => r.slice(nc - 2)), Rs = R.map((r) => r.slice(0, 2));
     const Lv = L.map((r) => r.slice(0, nc - 1)), Rv = R.map((r) => r.slice(1));
-    parts.push(...gridParts('1GRAVEL_L', 'shoulder', Ls, (i, j) => [shU(j === 0 ? -(half + shoulder) : -half), sRow(i) / MACRO_M.shoulder], tangent3));
-    parts.push(...gridParts('1GRAVEL_R', 'shoulder', Rs, (i, j) => [shU(j === 0 ? half : half + shoulder), sRow(i) / MACRO_M.shoulder], tangent3));
-    parts.push(...gridParts('1GRASS_L', 'verge', Lv, worldUv(Lv), tangent3));
-    parts.push(...gridParts('1GRASS_R', 'verge', Rv, worldUv(Rv), tangent3));
+    // Shoulders and verges skip bridge rows (the bridge has its own walkways); each run of land rows is its own
+    // set of strips. A run includes the bridge's end rows so the land meets the deck.
+    const runs: [number, number][] = [];
+    for (let i = 0; i < rowCount;) {
+        if (bridgeRow[ix(i)] && i < rowCount - 1 && bridgeRow[ix(i + 1)]) { i++; continue; }
+        let j = i;
+        while (j + 1 < rowCount && !(bridgeRow[ix(j)] && bridgeRow[ix(j + 1)])) j++;
+        if (j > i) runs.push([i, j]);
+        i = j + 1;
+    }
+    // Shoulder strips also change between gravel (rural) and sidewalk (urban); verges run on regardless.
+    const shoulderRuns: [number, number, boolean][] = [];
+    for (const [a, b] of runs) {
+        let k = a;
+        while (k < b) {
+            const u = urbanRow(ix(k));
+            let j = k; while (j < b && urbanRow(ix(j + 1)) === u) j++;
+            shoulderRuns.push([k, Math.min(b, j + 1), u]);
+            k = j + 1;
+        }
+    }
+    shoulderRuns.forEach(([a, b, u], r) => {
+        const sfx = shoulderRuns.length > 1 ? `_r${r}` : '';
+        const sl = (rows: V3[][]) => rows.slice(a, b + 1);
+        const row = (i: number) => a + i;
+        const [name, mat] = u ? ['1ROAD_WALK', 'sidewalk'] : ['1GRAVEL', 'shoulder'];
+        parts.push(...gridParts(`${name}_L${sfx}`, mat, sl(Ls), (i, j) => { const h = hw(ix(row(i))); return [shU(j === 0 ? -(h + shoulder) : -h), sRow(row(i)) / MACRO_M.shoulder]; }, (i) => tangent3(row(i))));
+        parts.push(...gridParts(`${name}_R${sfx}`, mat, sl(Rs), (i, j) => { const h = hw(ix(row(i))); return [shU(j === 0 ? h : h + shoulder), sRow(row(i)) / MACRO_M.shoulder]; }, (i) => tangent3(row(i))));
+    });
+    runs.forEach(([a, b], r) => {
+        const sfx = runs.length > 1 ? `_r${r}` : '';
+        const sl = (rows: V3[][]) => rows.slice(a, b + 1);
+        const row = (i: number) => a + i;
+        parts.push(...gridParts(`1GRASS_L${sfx}`, 'verge', sl(Lv), worldUv(sl(Lv)), (i) => tangent3(row(i))));
+        parts.push(...gridParts(`1GRASS_R${sfx}`, 'verge', sl(Rv), worldUv(sl(Rv)), (i) => tangent3(row(i))));
+    });
 
     // Road markings: thin painted strips 12 mm above the asphalt, following its crown and banking.
-    parts.push(...markingParts(cl, opts.markings ?? (closed ? { centre: 'none', edges: true } : { centre: 'double-solid', edges: true }), half, surf, at));
+    parts.push(...markingParts(cl, opts.markings ?? (closed ? { centre: 'none', edges: true } : { centre: 'double-solid', edges: true }), hw, surf, at, opts.lanes));
 
     if (opts.walls ?? true) {
         const h = opts.wallHeight ?? 2.5;
@@ -287,7 +358,7 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     // AC dummies. Positions on the road surface; forward = direction of travel.
     const on = (i: number, lat: number, up: number): V3 => at(i, lat, surf(i, lat) + up);
     const fwd = (i: number, flip = false): V3 => { const t = cl.tangents[i]; return flip ? [-t.x, 0, -t.y] : [t.x, 0, t.y]; };
-    const dummies: Dummy[] = closed ? circuitDummies(cl, half, on, fwd, opts.gridSlots ?? 12) : (() => {
+    const dummies: Dummy[] = closed ? circuitDummies(cl, hw(0), on, fwd, opts.gridSlots ?? 12) : (() => {
         const idxAt = (sM: number) => Math.max(0, Math.min(n - 1, Math.round(sM / cl.spacing)));
         const flip = !!opts.flipStart;
         const startI = idxAt(Math.min(12, cl.length * 0.05));
@@ -299,18 +370,19 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
             { name: 'AC_START_0', position: on(startI, 0, 0.1), forward: fwd(startI, flip) },
             { name: 'AC_PIT_0', position: on(pitI, 0, 0.1), forward: fwd(pitI, flip) },
             { name: 'AC_HOTLAP_START_0', position: on(hotI, 0, 0.1), forward: fwd(hotI, flip) },
-            { name: 'AC_TIME_0_L', position: on(lineA, -half - 1, 1), forward: fwd(lineA) },
-            { name: 'AC_TIME_0_R', position: on(lineA, half + 1, 1), forward: fwd(lineA) },
-            { name: 'AC_TIME_1_L', position: on(lineB, -half - 1, 1), forward: fwd(lineB) },
-            { name: 'AC_TIME_1_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
+            { name: 'AC_TIME_0_L', position: on(lineA, -hw(lineA) - 1, 1), forward: fwd(lineA) },
+            { name: 'AC_TIME_0_R', position: on(lineA, hw(lineA) + 1, 1), forward: fwd(lineA) },
+            { name: 'AC_TIME_1_L', position: on(lineB, -hw(lineB) - 1, 1), forward: fwd(lineB) },
+            { name: 'AC_TIME_1_R', position: on(lineB, hw(lineB) + 1, 1), forward: fwd(lineB) },
             // Point-to-point (A to B) timing reads these gates.
-            { name: 'AC_AB_START_L', position: on(lineA, -half - 1, 1), forward: fwd(lineA) },
-            { name: 'AC_AB_START_R', position: on(lineA, half + 1, 1), forward: fwd(lineA) },
-            { name: 'AC_AB_FINISH_L', position: on(lineB, -half - 1, 1), forward: fwd(lineB) },
-            { name: 'AC_AB_FINISH_R', position: on(lineB, half + 1, 1), forward: fwd(lineB) },
+            { name: 'AC_AB_START_L', position: on(lineA, -hw(lineA) - 1, 1), forward: fwd(lineA) },
+            { name: 'AC_AB_START_R', position: on(lineA, hw(lineA) + 1, 1), forward: fwd(lineA) },
+            { name: 'AC_AB_FINISH_L', position: on(lineB, -hw(lineB) - 1, 1), forward: fwd(lineB) },
+            { name: 'AC_AB_FINISH_R', position: on(lineB, hw(lineB) + 1, 1), forward: fwd(lineB) },
         ];
     })();
     const surfaceAt = (i: number, lat: number) => {
+        const half = hw(i);
         if (Math.abs(lat) <= half) return surf(i, lat);
         const p = prof[lat < 0 ? 0 : 1][i], d = Math.abs(lat) - half;
         for (let k = 1; k < p.offs.length; k++) if (d <= p.offs[k]) {
@@ -320,7 +392,7 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         return p.ys[p.ys.length - 1];
     };
     const vergeReach = (i: number, side: -1 | 1) => { const o = prof[side === -1 ? 0 : 1][i].offs; return o[o.length - 1]; };
-    return { parts, dummies, roadHeightAt: surf, surfaceAt, vergeReach, width: W };
+    return { parts, dummies, roadHeightAt: surf, surfaceAt, vergeReach, width: maxHalf * 2, halfAt: hw, onBridge: (i: number) => bridgeRow[i] === 1 };
 }
 
 /**
@@ -349,10 +421,66 @@ function circuitDummies(cl: Centerline, half: number, on: (i: number, lat: numbe
     return dummies;
 }
 
+/** One painted line at a centreline sample: lateral position, colour and pattern. */
+interface LineAt { lat: number; colour: 'white' | 'yellow'; pattern: 'solid' | 'dash' }
+
+/**
+ * The painted lines at sample i, keyed so the same line can be followed from sample to sample. US practice:
+ * yellow separates opposing traffic (double solid, passing zones, two-way left-turn lane: solid outside, dashed
+ * inside), white separates lanes going the same way (dashed; solid beside an exclusive turn lane), white edge
+ * lines on rural roads, a white line between the travel lane and a bike or parking lane.
+ */
+function linesAt(i: number, h: number, ls: LaneSet, centre: CentreStyle, plan: MarkingPlan): Map<string, LineAt> {
+    const out = new Map<string, LineAt>();
+    const OFF = 0.1; // half the gap between the lines of a pair, plus half a line
+    const edges = plan.edges && ls.edgeLines;
+    // Travel lanes span [L0, R0]; kerbside lanes (parking, bike) sit outside them.
+    const geo = laneGeometry(h, ls, edges);
+    const { L0, R0 } = geo;
+    if (ls.extraR > 0) out.set('kerbR', { lat: R0, colour: 'white', pattern: 'solid' });
+    else if (edges) out.set('edgeR', { lat: h - 0.25, colour: 'white', pattern: 'solid' });
+    if (ls.oneway || ls.bwd === 0) {
+        if (ls.extraL > 0) out.set('kerbL', { lat: L0, colour: 'white', pattern: 'solid' });
+        else if (edges) out.set('edgeL', { lat: -h + 0.25, colour: 'yellow', pattern: 'solid' });
+        for (let k = 1; k < ls.fwd; k++) out.set(`f${k}`, { lat: L0 + k * geo.lw, colour: 'white', pattern: dividerPattern(ls.turnFwd, k) });
+        return out;
+    }
+    if (ls.extraL > 0) out.set('kerbL', { lat: L0, colour: 'white', pattern: 'solid' });
+    else if (edges) out.set('edgeL', { lat: -h + 0.25, colour: 'white', pattern: 'solid' });
+    const lw = geo.lw, c0 = geo.c0; // c0: left edge of the centre (or of our lanes)
+    for (let k = 1; k < ls.bwd; k++) out.set(`b${k}`, { lat: c0 - k * lw, colour: 'white', pattern: dividerPattern(ls.turnBwd, k) });
+    let c1 = c0;
+    if (ls.centreTurn) {
+        c1 = c0 + lw;
+        out.set('tlA', { lat: c0 - OFF, colour: 'yellow', pattern: 'solid' });
+        out.set('tlB', { lat: c0 + OFF, colour: 'yellow', pattern: 'dash' });
+        out.set('tlC', { lat: c1 - OFF, colour: 'yellow', pattern: 'dash' });
+        out.set('tlD', { lat: c1 + OFF, colour: 'yellow', pattern: 'solid' });
+    } else {
+        // Two-lane roads take the plan's centre (passing zones); wider roads always get a double solid.
+        const st = ls.fwd + ls.bwd <= 2 ? centre : centre === 'none' ? 'none' : 'double-solid';
+        if (st === 'dashed') out.set('cM', { lat: c0, colour: 'yellow', pattern: 'dash' });
+        else if (st !== 'none') {
+            out.set('cL', { lat: c0 - OFF, colour: 'yellow', pattern: st === 'passing-back' ? 'dash' : 'solid' });
+            out.set('cR', { lat: c0 + OFF, colour: 'yellow', pattern: st === 'passing-forward' ? 'dash' : 'solid' });
+        }
+    }
+    for (let k = 1; k < ls.fwd; k++) out.set(`f${k}`, { lat: c1 + k * lw, colour: 'white', pattern: dividerPattern(ls.turnFwd, k) });
+    void i;
+    return out;
+}
+
+/** Divider between lane k-1 and k (left to right): solid beside an exclusive turn lane, else dashed. */
+function dividerPattern(turns: string[] | null, k: number): 'solid' | 'dash' {
+    if (!turns || turns.length <= k) return 'dash';
+    const excl = (t: string) => /^(left|right|slight_left|slight_right|merge_to_left|merge_to_right)$/.test(t);
+    return excl(turns[k - 1]) !== excl(turns[k]) ? 'solid' : 'dash';
+}
+
 /** Painted lines as their own meshes (PAINT_WHITE_n, PAINT_YELLOW_n): no physics, so they never change grip. */
-function markingParts(cl: Centerline, plan: MarkingPlan, half: number, surf: (i: number, lat: number) => number,
-    at: (i: number, lat: number, y: number) => V3): MeshPart[] {
-    const LINE = 0.1, GAP = 0.1, LIFT = 0.012, DASH = 3.05, PERIOD = 12.2, STEP = 1;
+function markingParts(cl: Centerline, plan: MarkingPlan, hw: (i: number) => number, surf: (i: number, lat: number) => number,
+    at: (i: number, lat: number, y: number) => V3, lanes?: LaneSet[]): MeshPart[] {
+    const LINE = 0.1, LIFT = 0.012, DASH = 3.05, PERIOD = 12.2, STEP = 1;
     const L = cl.length, n = cl.points.length;
     const styleAt = (sM: number): CentreStyle => {
         for (const o of plan.overrides ?? []) {
@@ -361,46 +489,16 @@ function markingParts(cl: Centerline, plan: MarkingPlan, half: number, surf: (i:
         }
         return plan.centre;
     };
-    // Position on the painted surface at distance sM (interpolated between centreline samples).
-    const spot = (sM: number, lat: number): V3 => {
-        let x = cl.closed ? ((sM % L) + L) % L : Math.max(0, Math.min(L, sM));
+    const plain: LaneSet = { fwd: 1, bwd: 1, centreTurn: false, oneway: false, turnFwd: null, turnBwd: null, extraL: 0, extraR: 0, edgeLines: true, laneWidth: 3.3 };
+    // Lines per sample (keyed), then each key followed along the road.
+    const per: Map<string, LineAt>[] = [];
+    for (let i = 0; i < n; i++) per.push(linesAt(i, hw(i), lanes?.[i] ?? plain, styleAt(cl.s[i]), plan));
+    const keys = new Set<string>(); per.forEach((m) => m.forEach((l, k) => keys.add(`${k}|${l.colour}|${l.pattern}`)));
+    const idxAt = (sM: number) => {
         let lo = 0, hi = n - 1;
-        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cl.s[mid] <= x) lo = mid; else hi = mid - 1; }
-        const nxt = cl.closed ? (lo + 1) % n : Math.min(n - 1, lo + 1);
-        const segEnd = nxt === 0 && cl.closed ? L : cl.s[nxt];
-        const t = segEnd > cl.s[lo] ? (x - cl.s[lo]) / (segEnd - cl.s[lo]) : 0;
-        const a = at(lo, lat, surf(lo, lat) + LIFT), b = at(nxt, lat, surf(nxt, lat) + LIFT);
-        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cl.s[mid] <= sM) lo = mid; else hi = mid - 1; }
+        return lo;
     };
-    // Which stretches of each line are painted: lists of [from, to] in metres.
-    const sample = (pred: (sM: number) => boolean): [number, number][] => {
-        const out: [number, number][] = [];
-        let open: number | null = null;
-        for (let sM = 0; sM <= L; sM += 0.5) {
-            const on = pred(Math.min(sM, L));
-            if (on && open === null) open = sM;
-            if (!on && open !== null) { out.push([open, sM]); open = null; }
-        }
-        if (open !== null) out.push([open, L]);
-        return out;
-    };
-    const dashes = (pred: (sM: number) => boolean): [number, number][] => {
-        const out: [number, number][] = [];
-        for (let a = 0; a < L; a += PERIOD) { const b = Math.min(L, a + DASH); if (pred((a + b) / 2)) out.push([a, b]); }
-        return out;
-    };
-    const lines: { lat: number; colour: 'white' | 'yellow'; spans: [number, number][] }[] = [];
-    if (plan.edges) {
-        const e = half - 0.2 - LINE / 2;
-        lines.push({ lat: -e, colour: 'white', spans: [[0, L]] }, { lat: e, colour: 'white', spans: [[0, L]] });
-    }
-    const off = (GAP + LINE) / 2;
-    const isDouble = (st: CentreStyle) => st === 'double-solid' || st === 'passing-forward' || st === 'passing-back';
-    // Left line of the pair faces oncoming traffic; the right line is on the driver's own (right-hand) side.
-    lines.push({ lat: -off, colour: 'yellow', spans: [...sample((s) => isDouble(styleAt(s)) && styleAt(s) !== 'passing-back'), ...dashes((s) => styleAt(s) === 'passing-back')] });
-    lines.push({ lat: off, colour: 'yellow', spans: [...sample((s) => isDouble(styleAt(s)) && styleAt(s) !== 'passing-forward'), ...dashes((s) => styleAt(s) === 'passing-forward')] });
-    lines.push({ lat: 0, colour: 'yellow', spans: dashes((s) => styleAt(s) === 'dashed') });
-
     const parts: Record<'white' | 'yellow', MeshPart[]> = { white: [], yellow: [] };
     const part = (colour: 'white' | 'yellow') => {
         const list = parts[colour], c = list[list.length - 1];
@@ -409,18 +507,47 @@ function markingParts(cl: Centerline, plan: MarkingPlan, half: number, surf: (i:
         list.push(p);
         return p;
     };
-    for (const ln of lines) for (const [s0, s1] of ln.spans) {
-        const steps = Math.max(1, Math.ceil((s1 - s0) / STEP));
-        for (let k = 0; k < steps; k++) {
-            const a = s0 + ((s1 - s0) * k) / steps, b = s0 + ((s1 - s0) * (k + 1)) / steps;
-            const p = part(ln.colour), base = p.positions.length / 3;
-            const corners: [number, number][] = [[a, ln.lat - LINE / 2], [a, ln.lat + LINE / 2], [b, ln.lat + LINE / 2], [b, ln.lat - LINE / 2]];
-            const pts = corners.map(([sM, lat]) => spot(sM, lat));
-            const t = norm(sub(pts[3], pts[0]));
-            corners.forEach(([sM, lat], q) => { p.positions.push(...pts[q]); p.normals.push(0, 1, 0); p.uvs.push(0.5 + lat / MACRO_M.paint, sM / MACRO_M.paint); p.tangents.push(t[2], 0, -t[0]); });
-            const ny = cross(sub(pts[1], pts[0]), sub(pts[2], pts[0]))[1];
-            if (ny > 0) p.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-            else p.indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+    for (const key of keys) {
+        const [name, colour, pattern] = key.split('|') as [string, 'white' | 'yellow', 'solid' | 'dash'];
+        const has = (i: number) => { const l = per[i].get(name); return !!l && l.colour === colour && l.pattern === pattern; };
+        const latOf = (i: number) => per[i].get(name)!.lat;
+        // Position at distance sM, lateral offset interpolated between the samples either side.
+        const spot = (sM: number, dLat: number): V3 => {
+            const x = cl.closed ? ((sM % L) + L) % L : Math.max(0, Math.min(L, sM));
+            const lo = idxAt(x), nxt = cl.closed ? (lo + 1) % n : Math.min(n - 1, lo + 1);
+            const segEnd = nxt === 0 && cl.closed ? L : cl.s[nxt];
+            const t = segEnd > cl.s[lo] ? (x - cl.s[lo]) / (segEnd - cl.s[lo]) : 0;
+            const la = (has(lo) ? latOf(lo) : latOf(nxt)) + dLat, lb = (has(nxt) ? latOf(nxt) : latOf(lo)) + dLat;
+            const a = at(lo, la, surf(lo, la) + LIFT), b = at(nxt, lb, surf(nxt, lb) + LIFT);
+            return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        };
+        // Runs of samples carrying this line, as metre spans (half a sample beyond each end).
+        const spans: [number, number][] = [];
+        for (let i = 0; i < n;) {
+            if (!has(i)) { i++; continue; }
+            let j = i; while (j + 1 < n && has(j + 1)) j++;
+            const a = i === 0 ? 0 : cl.s[i] - cl.spacing / 2, b = j === n - 1 ? L : cl.s[j] + cl.spacing / 2;
+            if (b - a > 0.5) spans.push([a, b]);
+            i = j + 1;
+        }
+        const pieces: [number, number][] = [];
+        for (const [a, b] of spans) {
+            if (pattern === 'solid') pieces.push([a, b]);
+            else for (let d = Math.floor(a / PERIOD) * PERIOD; d < b; d += PERIOD) { const x0 = Math.max(a, d), x1 = Math.min(b, d + DASH); if (x1 - x0 > 0.3) pieces.push([x0, x1]); }
+        }
+        for (const [s0, s1] of pieces) {
+            const steps = Math.max(1, Math.ceil((s1 - s0) / STEP));
+            for (let k = 0; k < steps; k++) {
+                const a = s0 + ((s1 - s0) * k) / steps, b = s0 + ((s1 - s0) * (k + 1)) / steps;
+                const p = part(colour), base = p.positions.length / 3;
+                const corners: [number, number][] = [[a, -LINE / 2], [a, LINE / 2], [b, LINE / 2], [b, -LINE / 2]];
+                const pts = corners.map(([sM, d]) => spot(sM, d));
+                const t = norm(sub(pts[3], pts[0]));
+                corners.forEach(([sM, d], q) => { p.positions.push(...pts[q]); p.normals.push(0, 1, 0); p.uvs.push(0.5 + d / MACRO_M.paint, sM / MACRO_M.paint); p.tangents.push(t[2], 0, -t[0]); });
+                const ny = cross(sub(pts[1], pts[0]), sub(pts[2], pts[0]))[1];
+                if (ny > 0) p.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+                else p.indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+            }
         }
     }
     return [...parts.white, ...parts.yellow].filter((p) => p.indices.length);

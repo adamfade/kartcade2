@@ -13,12 +13,15 @@ This file says how the pieces fit, so new stages slot in without rework. Keep it
    - material library: Storage `trackbuilder/library/<version>/<role>/{albedo,detail,normal,maps}.dds` + `manifest.json`
    - site data: Storage `trackbuilder/sites/<siteId>/` (siteId = hash of the route line, so projects on the same road
      share it): `manifest.json` (plan, fetch date, files), per cell `dem.png` (Terrarium-encoded 1 m DEM),
-     `rgb.jpg` (NAIP 0.5 m), `nir.jpg` (near-infrared), `overview/` (coarser DEM + imagery), and `osm.json.gz`
-     (OpenStreetMap buildings, woods, trees, barriers and water over the overview square; sites stored before it
-     existed get it on their next load)
+     `rgb.jpg` (NAIP 0.5 m), `nir.jpg` (near-infrared), `overview/` (coarser DEM + imagery), `osm.json.gz`
+     (OpenStreetMap buildings, woods, trees, barriers and water over the overview square, plus the drivable roads
+     and street furniture along the route; `OSM_VERSION` bumps refetch it), and per cell `surface.png` +
+     `class.png` with `surface.json` (lidar surface, below). Sites stored before a layer existed get it on their
+     next load.
    - projects: Firestore `trackProjects`
 3. **Licences we can ship.** Only CC0 / public-domain / ODbL-with-attribution data goes into a track:
-   Poly Haven (CC0), USGS 3DEP and NAIP (public domain), OpenStreetMap (ODbL, credited in ui_track.json).
+   Poly Haven (CC0), USGS 3DEP DEM, point cloud and NAIP (public domain), OpenStreetMap (ODbL, credited in
+   ui_track.json).
    Google Maps / Earth / Street View content is never copied, traced or stored (Map Tiles API policies);
    the editor only *links* to Street View for staff reference.
 4. **AC-correct output.** DDS textures with full mip chains (BC1, BC3 for alpha), documented shader slots and
@@ -60,15 +63,23 @@ coverage (`MipKind 'cutout'`), so forests don't thin out with distance.
 | 1 | Photo-scanned material library, macro + detail surfaces, DDS, markings, gravel shoulder, CSP config | done |
 | 2 | Street View reference links in the editor | done |
 | 3 | Site data: USGS 3DEP 1 m elevation and NAIP aerial imagery (RGB + near-infrared), fetched in the browser and stored per route (`site.ts`, `siteStore.ts`); verge follows the lidar ground; aerial photo as the verge/terrain macro per 512 m cell with the road painted out (`ground.ts`); invisible boundary walls | done |
-| 3b | Surface classes from imagery (forest floor, dirt, gravel drives), tree placement from near-infrared, a distant low-res terrain ring to the horizon | planned |
+| 3b | Trees from the near-infrared canopy where there is no lidar (done); surface classes from imagery (forest floor, dirt, gravel drives) and a distant terrain ring to the horizon | partly done |
 | 4 | OpenStreetMap features (`osm.ts`, `features.ts`): buildings from footprints with levels/height tags, gable roofs on rectangles, hip otherwise, flat on big buildings; woods filled with billboard trees (denser near the road, smaller where they would overhang it, far ones thinned and LOD'd out); single trees and tree rows; guard rails, fences, walls and hedges with gaps at the road. Chunked into 256 m cells; collision (`1WALL_*`) only within 45 m of the road. Water is fetched and stored for stage 3b | done |
-| 5 | Vegetation and detail: billboard tree species, GrassFX tuning, LODs, roadside clutter (mailboxes, posts, signs from reference) | planned |
+| 4b | The road as mapped (`roadinfo.ts`): each centreline sample matched to its OSM way; width from lanes, parking and bike lanes (tapered over 40 m); lane lines per US practice (double yellow, two-way turn lane, white dashed lane lines, solid beside turn pockets, kerbside lines); raised concrete sidewalks on urban streets | done |
+| 4c | Bridges (`bridge.ts`): the deck levelled across the gap (bare-earth DEMs drop to the river); kerbed walkways, parapets with collision, deck slab; beam bridges on piers, arch (through arch on long spans: ribs, hangers, struts) or steel truss, chosen per bridge in the editor | done |
+| 4d | Streets (`streets.ts`): side-street stubs at every junction; mast-arm signals (far-right corner, a head per lane, street name blade; static green for the route, red for side streets); stop and yield signs with stop lines; crosswalks (continental or two lines); lane-use arrows; speed limit signs where the limit changes; street lights; bus stops | done |
+| 4e | Lidar surface (`lidar.ts`): the 3DEP point cloud (EPT on AWS) fetched along the corridor (~120 m each side) and rasterised to height-above-ground + class per cell, datum-checked against the DEM. Gives real roof heights and shapes, unmapped buildings (tall, non-vegetation blobs), and every tree as a lidar treetop with its real height and crown shape (pointed = conifer) | done |
+| 5 | Vegetation and detail: photo-based tree species, GrassFX tuning, LODs, roadside clutter (mailboxes, posts, warning signs from reference), animated signals (CSP) | planned |
 
 ## Builds
 
-The editor preview runs a geometry-only build on the page (`output: 'geometry'`: lazy textures, no KN5/zip). The
-download runs the full build in a web worker (`heavy.worker.ts`, op `buildTrack`) from plain data: inputs,
-Terrarium tiles, site rasters and the material library.
+Both builds run in a web worker (`heavy.worker.ts`) from plain data: inputs, Terrarium tiles, site rasters and the
+material library. The preview (op `buildPreview`) is geometry-only (`output: 'geometry'`: lazy textures, no KN5 or
+zip) and comes back through `portable.ts`, which turns the geometry's functions into tables. The download (op
+`buildTrack`) packs the full track.
+
+Source priority for surroundings: lidar surface, then near-infrared canopy, then OpenStreetMap woods and trees.
+Buildings always come from OSM footprints (lidar sets their heights), plus lidar-only buildings where OSM has none.
 
 ## Output layout
 

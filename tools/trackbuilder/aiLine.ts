@@ -9,7 +9,8 @@
 export interface AiPoint { x: number; y: number; z: number } // AC space (X east, Y up, Z north)
 
 export interface FastLaneOptions {
-    halfWidth: number;
+    /** Half the drivable width, metres: one value, or one per point. */
+    halfWidth: number | ArrayLike<number>;
     curvature?: number[];
     grade?: number[];
     /** Circuit: the last point connects back to the first (no duplicate point at the end). */
@@ -52,7 +53,8 @@ export function writeFastLane(points: AiPoint[], opts: FastLaneOptions): Uint8Ar
         f32(braking ? 0.6 : 0); // brake
         f32(0); // obsolete lat G
         f32(Math.abs(k[i]) > 1e-5 ? 1 / Math.abs(k[i]) : 10000); // radius
-        f32(opts.halfWidth); f32(opts.halfWidth); // side left / right
+        const hw = typeof opts.halfWidth === 'number' ? opts.halfWidth : opts.halfWidth[i];
+        f32(hw); f32(hw); // side left / right
         f32(0); // camber
         f32(Math.atan2(fwd[0], fwd[2])); // direction
         f32(0); f32(1); f32(0); // normal

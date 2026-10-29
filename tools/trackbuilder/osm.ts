@@ -1,5 +1,7 @@
 // OpenStreetMap features around a track (ODbL, credited in ui_track.json): buildings, woods, single trees,
-// barriers. Fetched once from the Overpass API in the browser and stored with the site data.
+// barriers, the drivable roads near the route (lanes, widths, bridges, side streets) and street furniture
+// (signals, stop signs, crossings, lamps, bus stops). Fetched once from the Overpass API in the browser and
+// stored with the site data. Bump OSM_VERSION when the query changes so stored sites refetch.
 
 import type { LatLon } from './geo.ts';
 import type { GeoBox } from './site.ts';
@@ -8,8 +10,16 @@ export interface OsmBuilding { id: number; ring: LatLon[]; tags: Record<string, 
 export interface OsmArea { id: number; rings: LatLon[][]; tags: Record<string, string> }
 export interface OsmPoint { id: number; at: LatLon; tags: Record<string, string> }
 export interface OsmLine { id: number; line: LatLon[]; tags: Record<string, string> }
+/** A road with its node ids, so junctions (shared nodes) and signals on it can be found. */
+export interface OsmWay { id: number; nodes: number[]; line: LatLon[]; tags: Record<string, string> }
+
+export const OSM_VERSION = 2;
+/** Highways a car can use (side streets, the route itself). */
+export const DRIVABLE = /^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)(_link)?$/;
 
 export interface OsmFeatures {
+    /** Query version (absent = 1: no roads or street furniture). */
+    version?: number;
     fetched: string;
     bbox: GeoBox;
     buildings: OsmBuilding[];
@@ -19,11 +29,46 @@ export interface OsmFeatures {
     /** Guard rails, fences, walls, hedges, retaining walls. */
     barriers: OsmLine[];
     water: OsmArea[];
+    /** Drivable roads within ~200 m of the route (v2+). */
+    roads?: OsmWay[];
+    /** Street furniture within ~60 m of the route (v2+): signals, stop/give way, crossings, lamps, bus stops, signs. */
+    points?: OsmPoint[];
 }
 
-export function overpassQuery(b: GeoBox): string {
+/** Douglas-Peucker in degrees scaled to metres (for Overpass `around` lines, which have a length limit). */
+export function simplifyLine(line: LatLon[], tolM = 8): LatLon[] {
+    if (line.length < 3) return line.slice();
+    const kx = 111320 * Math.cos((line[0].lat * Math.PI) / 180), ky = 110540;
+    const keep = new Uint8Array(line.length); keep[0] = keep[line.length - 1] = 1;
+    const stack: [number, number][] = [[0, line.length - 1]];
+    while (stack.length) {
+        const [a, b] = stack.pop()!;
+        const ax = line[a].lon * kx, ay = line[a].lat * ky, dx = line[b].lon * kx - ax, dy = line[b].lat * ky - ay, l2 = dx * dx + dy * dy || 1;
+        let best = -1, bd = tolM;
+        for (let i = a + 1; i < b; i++) {
+            const px = line[i].lon * kx - ax, py = line[i].lat * ky - ay, t = Math.max(0, Math.min(1, (px * dx + py * dy) / l2));
+            const d = Math.hypot(px - dx * t, py - dy * t);
+            if (d > bd) { bd = d; best = i; }
+        }
+        if (best > 0) { keep[best] = 1; stack.push([a, best], [best, b]); }
+    }
+    return line.filter((_, i) => keep[i]);
+}
+
+export function overpassQuery(b: GeoBox, route?: LatLon[]): string {
     const bb = `${b.south.toFixed(6)},${b.west.toFixed(6)},${b.north.toFixed(6)},${b.east.toFixed(6)}`;
-    return `[out:json][timeout:90];
+    let near = '';
+    if (route && route.length >= 2) {
+        let tol = 8, s = simplifyLine(route, tol);
+        while (s.length > 400) s = simplifyLine(route, (tol *= 1.6));
+        const L = s.map((p) => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`).join(',');
+        near = `
+  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)(_link)?$"](around:200,${L});
+  node["highway"~"^(traffic_signals|stop|give_way|crossing|street_lamp|bus_stop|speed_camera)$"](around:60,${L});
+  node["traffic_sign"](around:60,${L});
+  node["railway"="level_crossing"](around:60,${L});`;
+    }
+    return `[out:json][timeout:120];
 (
   way["building"](${bb});
   relation["building"]["type"="multipolygon"](${bb});
@@ -32,12 +77,12 @@ export function overpassQuery(b: GeoBox): string {
   way["natural"~"^(wood|scrub|tree_row|water)$"](${bb});
   relation["natural"~"^(wood|water)$"](${bb});
   node["natural"="tree"](${bb});
-  way["barrier"~"^(guard_rail|fence|wall|hedge|retaining_wall)$"](${bb});
+  way["barrier"~"^(guard_rail|fence|wall|hedge|retaining_wall)$"](${bb});${near}
 );
-out tags geom qt;`;
+out body geom qt;`;
 }
 
-type El = { type: 'node' | 'way' | 'relation'; id: number; lat?: number; lon?: number; tags?: Record<string, string>; geometry?: { lat: number; lon: number }[]; members?: { type: string; role: string; geometry?: { lat: number; lon: number }[] }[] };
+type El = { type: 'node' | 'way' | 'relation'; id: number; lat?: number; lon?: number; tags?: Record<string, string>; nodes?: number[]; geometry?: { lat: number; lon: number }[]; members?: { type: string; role: string; geometry?: { lat: number; lon: number }[] }[] };
 
 const ring = (g: { lat: number; lon: number }[] | undefined) => (g ?? []).filter((p) => p && Number.isFinite(p.lat)).map((p) => ({ lat: p.lat, lon: p.lon }));
 const closed = (r: LatLon[]) => r.length >= 4 && Math.abs(r[0].lat - r[r.length - 1].lat) < 1e-9 && Math.abs(r[0].lon - r[r.length - 1].lon) < 1e-9;
@@ -68,11 +113,22 @@ function joinOuter(members: El['members']): LatLon[][] {
 }
 
 export function parseOverpass(json: { elements?: El[] }, bbox: GeoBox, fetched: string): OsmFeatures {
-    const f: OsmFeatures = { fetched, bbox, buildings: [], woods: [], trees: [], barriers: [], water: [] };
+    const f: OsmFeatures = { version: OSM_VERSION, fetched, bbox, buildings: [], woods: [], trees: [], barriers: [], water: [], roads: [], points: [] };
+    const seen = new Set<string>();
     for (const e of json.elements ?? []) {
+        const key = `${e.type}${e.id}`;
+        if (seen.has(key)) continue; // a feature matched by two parts of the query
+        seen.add(key);
         const t = e.tags ?? {};
         if (e.type === 'node') {
-            if (t.natural === 'tree' && e.lat != null && e.lon != null) f.trees.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
+            if (e.lat == null || e.lon == null) continue;
+            if (t.natural === 'tree') f.trees.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
+            else if (t.highway || t.traffic_sign || t.railway === 'level_crossing') f.points!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
+            continue;
+        }
+        if (e.type === 'way' && t.highway && DRIVABLE.test(t.highway) && t.area !== 'yes') {
+            const l = ring(e.geometry);
+            if (l.length >= 2 && e.nodes?.length === l.length) f.roads!.push({ id: e.id, nodes: e.nodes, line: l, tags: t });
             continue;
         }
         const rings = e.type === 'way' ? [ring(e.geometry)].filter(closed) : joinOuter(e.members);
@@ -88,8 +144,8 @@ export function parseOverpass(json: { elements?: El[] }, bbox: GeoBox, fetched: 
 }
 
 /** Fetch from Overpass (public instance; the page waits and retries once if it is busy). */
-export async function fetchOsm(fetchFn: (u: string, i?: RequestInit) => Promise<Response>, bbox: GeoBox): Promise<OsmFeatures> {
-    const body = `data=${encodeURIComponent(overpassQuery(bbox))}`;
+export async function fetchOsm(fetchFn: (u: string, i?: RequestInit) => Promise<Response>, bbox: GeoBox, route?: LatLon[]): Promise<OsmFeatures> {
+    const body = `data=${encodeURIComponent(overpassQuery(bbox, route))}`;
     let last: unknown = null;
     for (const host of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']) {
         try {

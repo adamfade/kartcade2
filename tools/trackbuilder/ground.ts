@@ -97,7 +97,7 @@ function chunk(p: MeshPart): MeshPart[] {
  * with the road and shoulder painted out using the ground just beyond the shoulder, scaled x2 for the 0.5-mean
  * detail layer, alpha 0 so the photo-scanned detail shows everywhere.
  */
-export function aerialMacro(region: GroundRegion, site: SiteRasters, cl: Centerline, g: TrackGeometry, footprintM: number): Rgba {
+export function aerialMacro(region: GroundRegion, site: SiteRasters, cl: Centerline, g: TrackGeometry, beyondM = 1): Rgba {
     const N = region.texture, b = region.bbox;
     const sample = siteImageSampler(site);
     const proj = cl.projection;
@@ -111,6 +111,7 @@ export function aerialMacro(region: GroundRegion, site: SiteRasters, cl: Centerl
     const stepLat = Math.max(0.25, pxM * 0.5);
     for (let i = 0; i < cl.points.length; i++) {
         const p = cl.points[i], t = cl.tangents[i], r = { x: t.y, y: -t.x };
+        const footprintM = g.halfAt(i) + beyondM;
         for (const side of [-1, 1] as const) {
             const take = proj.toLatLon({ x: p.x + r.x * side * (footprintM + 3), y: p.y + r.y * side * (footprintM + 3) });
             for (let d = 0; d <= footprintM + 0.75; d += stepLat) {
@@ -135,6 +136,5 @@ export function aerialMacro(region: GroundRegion, site: SiteRasters, cl: Centerl
             data[k * 4 + 3] = 0;
         }
     }
-    void g;
     return { width: N, height: N, data };
 }

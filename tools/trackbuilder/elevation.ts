@@ -69,10 +69,11 @@ function median(a: number[]) { const s = a.slice().sort((x, y) => x - y); return
  * Heights along the centerline. Raw DEM samples are noisy (trees, bridges, 10 m cells), so:
  * median filter -> Gaussian -> grade clamp. sigmaM is the Gaussian radius in metres.
  */
-export function roadProfile(points: LatLon[], s: number[], sampler: HeightSampler, opts: { sigmaM?: number; maxGrade?: number; closed?: boolean; loopLength?: number } = {}): Profile {
+export function roadProfile(points: LatLon[], s: number[], sampler: HeightSampler, opts: { sigmaM?: number; maxGrade?: number; closed?: boolean; loopLength?: number; raw?: (number | null)[] } = {}): Profile {
     const n = points.length;
     const closed = !!opts.closed;
-    const raw = points.map((p) => sampler(p));
+    // `raw` lets the caller fix samples first (bridges levelled across the gap the bare-earth DEM shows).
+    const raw = opts.raw ?? points.map((p) => sampler(p));
     // Fill unknowns from the nearest known sample.
     let last: number | null = raw.find((v) => v != null) ?? 0;
     const filled = raw.map((v) => { if (v != null) last = v; return last as number; });

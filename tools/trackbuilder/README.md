@@ -85,8 +85,14 @@ Model details:
 - **Surroundings (with Real ground on):** buildings, woods, single trees, tree rows, guard rails, fences, walls
   and hedges from OpenStreetMap (`osm.ts`, `features.ts`), fetched once per site from the Overpass API in the
   browser and stored as `osm.json.gz` with the site data. Buildings get real footprints and roofs; woods become
-  billboard trees; nothing is placed on the road or shoulder. Credited in `ui_track.json` (ODbL). See
-  ARCHITECTURE.md for the full pipeline.
+  billboard trees; nothing is placed on the road or shoulder. Credited in `ui_track.json` (ODbL).
+- **The road as mapped:** width and lane lines from the OSM lanes along the way (`roadinfo.ts`), sidewalks on
+  urban streets, bridges levelled and built (`bridge.ts`; pick beam, arch or truss per bridge in the editor),
+  side streets, signals, stop signs, crosswalks, arrows, speed signs, street lights and bus stops (`streets.ts`).
+- **Lidar surface:** the USGS point cloud along the road (`lidar.ts`, decoded with laz-perf) gives real building
+  heights and roof shapes, buildings OSM lacks, and every tree at its real spot and height.
+
+See ARCHITECTURE.md for the full pipeline.
 
 ## Circuit mode
 

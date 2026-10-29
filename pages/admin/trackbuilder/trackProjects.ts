@@ -31,6 +31,8 @@ export interface TrackProject {
     siteId?: string | null;
     /** Build with the real ground (lidar + aerial photo). Default true. */
     realGround?: boolean;
+    /** Bridge structure per OSM way id, chosen in the editor. */
+    bridgeStyles?: Record<string, 'beam' | 'arch' | 'truss'>;
     stats?: { lengthM: number; climbM: number } | null;
     createdBy?: string;
     updatedBy?: string;

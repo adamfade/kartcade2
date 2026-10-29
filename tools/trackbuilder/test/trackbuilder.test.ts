@@ -310,7 +310,7 @@ test('site data: lidar verge, aerial ground split by cell, road painted out, inv
     // The road stripe in the photo is replaced near the road in the macro.
     const regions = siteRegions(site);
     const r = regions[0];
-    const macro = aerialMacro({ ...r, texture: 64 }, site, res.centerline, res.geometry, 6.5 / 2 + 1);
+    const macro = aerialMacro({ ...r, texture: 64 }, site, res.centerline, res.geometry, 1);
     let dark = 0;
     for (let i = 0; i < macro.data.length; i += 4) if (macro.data[i] < 140 && macro.data[i + 1] < 140) dark++;
     assert.equal(dark, 0, 'no asphalt-coloured pixels left in the ground texture');

@@ -105,9 +105,9 @@ function frame(cl: Centerline, g: TrackGeometry) {
         const r = right(i);
         return [cl.points[i].x + r.x * lat, g.surfaceAt(i, lat) + up, cl.points[i].y + r.z * lat];
     };
-    const half = g.width / 2;
+    const half = (i: number) => g.halfAt(i);
     /** Lateral offset for something `want` metres beyond the asphalt, kept inside the verge (and its wall). */
-    const beyond = (i: number, side: -1 | 1, want: number, margin = 0.4) => side * (half + Math.max(0.3, Math.min(want, g.vergeReach(i, side) - margin)));
+    const beyond = (i: number, side: -1 | 1, want: number, margin = 0.4) => side * (half(i) + Math.max(0.3, Math.min(want, g.vergeReach(i, side) - margin)));
     return { n, index, span, right, fwd, at, half, beyond };
 }
 
@@ -245,7 +245,7 @@ export function buildElements(cl: Centerline, g: TrackGeometry, elements: TrackE
                         if (0.26 * H > room) H = room / 0.26;
                         if (H < 6) { rand(); continue; } // no room between the shoulder and the wall
                         const minOff = 0.26 * H + 1;
-                        const lat = side * (f.half + minOff + rand() * Math.max(0, reach - 1.5 - minOff));
+                        const lat = side * (f.half(i) + minOff + rand() * Math.max(0, reach - 1.5 - minOff));
                         tree(trunks, crowns, f.at(i, lat), H, rand);
                     }
                 }
@@ -254,10 +254,10 @@ export function buildElements(cl: Centerline, g: TrackGeometry, elements: TrackE
             case 'tree': {
                 const i = f.index(e.at);
                 const side = e.offset < 0 ? -1 : 1;
-                const want = Math.abs(e.offset) - f.half;
+                const want = Math.abs(e.offset) - f.half(i);
                 if (want < 4.6) warnings.push(`Tree at ${Math.round(e.at)} m moved off the road`);
-                const off = Math.abs(f.beyond(i, side, Math.max(4.6, want), 1.5)) - f.half;
-                tree(trunks, crowns, f.at(i, side * (f.half + off)), Math.max(6, Math.min(16, (off - 1) / 0.26)), rng(hash(e.id)));
+                const off = Math.abs(f.beyond(i, side, Math.max(4.6, want), 1.5)) - f.half(i);
+                tree(trunks, crowns, f.at(i, side * (f.half(i) + off)), Math.max(6, Math.min(16, (off - 1) / 0.26)), rng(hash(e.id)));
                 break;
             }
             case 'sign': {

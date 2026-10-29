@@ -51,7 +51,7 @@ export function buildTerrain(cl: Centerline, g: TrackGeometry, opts: TerrainOpti
         if (best < 0 || Math.sqrt(bd) > zone) return null;
         const t = cl.tangents[best];
         const lat = (x - P[best].x) * t.y + (z - P[best].y) * -t.x;
-        const reachL = half + g.vergeReach(best, -1), reachR = half + g.vergeReach(best, 1);
+        const reachL = g.halfAt(best) + g.vergeReach(best, -1), reachR = g.halfAt(best) + g.vergeReach(best, 1);
         if (lat < -reachL - spacing * 1.5 || lat > reachR + spacing * 1.5) return null;
         return g.surfaceAt(best, Math.max(-reachL, Math.min(reachR, lat))) - 0.3;
     };

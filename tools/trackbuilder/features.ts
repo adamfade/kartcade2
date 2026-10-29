@@ -1,11 +1,22 @@
-// Surroundings from OpenStreetMap: buildings (walls with windows, gable / hip / flat roofs), woods and single
-// trees as alpha-tested billboards, and mapped barriers (guard rails, fences, walls, hedges, tree rows).
-// Everything is chunked into 256 m cells so Assetto Corsa can cull it, and kept off the road.
+// Surroundings: buildings (walls with windows, gable / hip / flat roofs), trees as alpha-tested billboards, and
+// mapped barriers (guard rails, fences, walls, hedges, tree rows). Everything is chunked into 256 m cells so
+// Assetto Corsa can cull it, and kept off every road.
+//
+// Sources, best first:
+//   - lidar surface (lidar.ts): real roof heights and shapes for mapped buildings, unmapped buildings, and every
+//     tree as a lidar treetop with its real height
+//   - near-infrared aerial: tells vegetation from buildings in the lidar, or finds tree canopy on its own
+//   - OpenStreetMap: building footprints, woods and single trees where neither of the above covers
 
 import type { Centerline } from './route.ts';
 import type { MeshPart, TrackGeometry, V3 } from './mesh.ts';
 import type { HeightSampler } from './elevation.ts';
 import type { OsmFeatures } from './osm.ts';
+import { DRIVABLE } from './osm.ts';
+import type { SiteCell, SiteRasters } from './site.ts';
+import { sampleImage } from './site.ts';
+import type { SurfaceRaster } from './lidar.ts';
+import { laneSet, wayWidth } from './roadinfo.ts';
 import type { MaterialBook, MaterialLibrary } from './materials.ts';
 import { macroDetailMaterial, tileNoise } from './materials.ts';
 import type { Rgba } from './dds.ts';
@@ -18,9 +29,13 @@ export interface FeatureOptions {
     maxTrees?: number;
     /** Buildings and barriers closer than this to the road get collision. */
     collisionM?: number;
+    /** Site rasters: lidar surfaces and near-infrared imagery per cell, when stored. */
+    site?: SiteRasters;
+    /** Side-street stubs built by streets.ts (kept clear like any road). */
+    stubs?: { pts: P2[]; half: number }[];
 }
 
-export interface FeatureStats { buildings: number; trees: number; barriers: number }
+export interface FeatureStats { buildings: number; trees: number; barriers: number; lidarBuildings?: number; lidarTrees?: number; canopyTrees?: number }
 
 const CELL = 256;
 function hash(n: number) { let h = (n ^ 0x9e3779b9) >>> 0; h = Math.imul(h ^ (h >>> 16), 0x85ebca6b); h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
@@ -177,20 +192,65 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
     const proj = cl.projection;
     const L = (p: { lat: number; lon: number }): P2 => proj.toLocal(p);
     const H = (p: P2) => ground(proj.toLatLon(p)) ?? 0;
-    const half = g.width / 2;
     const collisionM = opts.collisionM ?? 45;
 
     // Nearest centreline sample (grid) for road clearance and collision decisions.
     const P = cl.points, GC = 50;
     const grid = new Map<string, number[]>();
     P.forEach((p, i) => { const k = `${Math.floor(p.x / GC)},${Math.floor(p.y / GC)}`; let b = grid.get(k); if (!b) grid.set(k, (b = [])); b.push(i); });
-    const roadDist = (p: P2, max = 150): number => {
+    /** Distance to the route centreline and the nearest sample. */
+    const nearRoute = (p: P2, max = 150): { d: number; i: number } => {
         const cx = Math.floor(p.x / GC), cy = Math.floor(p.y / GC), r = Math.ceil(max / GC);
+        let best = Infinity, bi = 0;
+        for (let a = cx - r; a <= cx + r; a++) for (let b = cy - r; b <= cy + r; b++) for (const i of grid.get(`${a},${b}`) ?? []) { const d = Math.hypot(p.x - P[i].x, p.y - P[i].y); if (d < best) { best = d; bi = i; } }
+        return { d: best, i: bi };
+    };
+    const roadDist = (p: P2, max = 150) => nearRoute(p, max).d;
+    /** Clearance from the route's asphalt edge (negative = on it). */
+    const routeEdge = (p: P2, max = 150) => { const q = nearRoute(p, max); return q.d - g.halfAt(q.i); };
+
+    // Every other road (side streets, roads further off) as segments with half widths, for keeping things off them.
+    const RG = 30, roadSegs = new Map<string, { ax: number; ay: number; bx: number; by: number; h: number }[]>();
+    const addSeg = (a: P2, b: P2, h: number) => {
+        const seg = { ax: a.x, ay: a.y, bx: b.x, by: b.y, h };
+        const x0 = Math.floor((Math.min(a.x, b.x) - h) / RG), x1 = Math.floor((Math.max(a.x, b.x) + h) / RG);
+        const y0 = Math.floor((Math.min(a.y, b.y) - h) / RG), y1 = Math.floor((Math.max(a.y, b.y) + h) / RG);
+        for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) { const k = `${gx},${gy}`; let l = roadSegs.get(k); if (!l) roadSegs.set(k, (l = [])); l.push(seg); }
+    };
+    for (const w of osm.roads ?? []) {
+        if (!DRIVABLE.test(w.tags.highway ?? '')) continue;
+        const h = Math.min(9, wayWidth(w.tags, laneSet(w.tags, 1)) / 2);
+        const pts = w.line.map(L);
+        for (let k = 0; k < pts.length - 1; k++) addSeg(pts[k], pts[k + 1], h);
+    }
+    for (const st of opts.stubs ?? []) for (let k = 0; k < st.pts.length - 1; k++) addSeg(st.pts[k], st.pts[k + 1], st.half);
+    /** Clearance from the edge of any mapped road (Infinity when none is near). */
+    const otherRoadEdge = (p: P2) => {
         let best = Infinity;
-        for (let a = cx - r; a <= cx + r; a++) for (let b = cy - r; b <= cy + r; b++) for (const i of grid.get(`${a},${b}`) ?? []) best = Math.min(best, Math.hypot(p.x - P[i].x, p.y - P[i].y));
+        for (const sgm of roadSegs.get(`${Math.floor(p.x / RG)},${Math.floor(p.y / RG)}`) ?? []) {
+            const dx = sgm.bx - sgm.ax, dy = sgm.by - sgm.ay, l2 = dx * dx + dy * dy || 1;
+            const t = Math.max(0, Math.min(1, ((p.x - sgm.ax) * dx + (p.y - sgm.ay) * dy) / l2));
+            best = Math.min(best, Math.hypot(p.x - sgm.ax - dx * t, p.y - sgm.ay - dy * t) - sgm.h);
+        }
         return best;
     };
-    const clearRoad = half + 1 + 2.5; // asphalt + shoulder + a margin
+    const clearOfRoads = (p: P2) => Math.min(routeEdge(p), otherRoadEdge(p));
+
+    // Site rasters per cell: lidar surface and near-infrared.
+    const cells = (opts.site?.cells ?? []).filter((c) => c.surface || c.nir);
+    const cellAt = (ll: { lat: number; lon: number }) => cells.find((c) => ll.lon >= c.bbox.west && ll.lon < c.bbox.east && ll.lat >= c.bbox.south && ll.lat < c.bbox.north);
+    /** Normalised difference vegetation index from the NAIP near-infrared and red bands (null without NIR). */
+    const ndviAt = (c: SiteCell, ll: { lat: number; lon: number }) => {
+        if (!c.nir || !c.rgb) return null;
+        const n = sampleImage(c.nir, ll), r = sampleImage(c.rgb, ll);
+        if (!n || !r) return null;
+        return (n[0] - r[0]) / (n[0] + r[0] + 1);
+    };
+    const surfaceCovers = (ll: { lat: number; lon: number }) => {
+        const c = cellAt(ll); if (!c?.surface) return false;
+        const s = c.surface, px = Math.floor(((ll.lon - s.bbox.west) / (s.bbox.east - s.bbox.west)) * s.width), py = Math.floor(((s.bbox.north - ll.lat) / (s.bbox.north - s.bbox.south)) * s.height);
+        return px >= 0 && py >= 0 && px < s.width && py < s.height && Number.isFinite(s.above[py * s.width + px]);
+    };
 
     // Chunked meshes per (kind, cell, material).
     const meshes = new Map<string, Mesh>();
@@ -222,30 +282,51 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
         return treeMat;
     };
 
-    const stats: FeatureStats = { buildings: 0, trees: 0, barriers: 0 };
+    const stats: FeatureStats = { buildings: 0, trees: 0, barriers: 0, lidarBuildings: 0, lidarTrees: 0, canopyTrees: 0 };
+
+    /** Lidar heights inside a footprint: sorted heights above ground of non-vegetation returns. */
+    const roofSamples = (ring: P2[]): number[] => {
+        const ll0 = proj.toLatLon(ring[0]), c = cellAt(ll0);
+        if (!c?.surface) return [];
+        const s = c.surface;
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        for (const p of ring) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+        const out: number[] = [];
+        for (let y = y0 + 0.4; y < y1; y += 0.8) for (let x = x0 + 0.4; x < x1; x += 0.8) {
+            const p = { x, y };
+            if (!inRing(p, ring)) continue;
+            const ll = proj.toLatLon(p);
+            if (ll.lon < s.bbox.west || ll.lon >= s.bbox.east || ll.lat < s.bbox.south || ll.lat >= s.bbox.north) continue;
+            const px = Math.floor(((ll.lon - s.bbox.west) / (s.bbox.east - s.bbox.west)) * s.width), py = Math.floor(((s.bbox.north - ll.lat) / (s.bbox.north - s.bbox.south)) * s.height);
+            const v = s.above[py * s.width + px];
+            if (!Number.isFinite(v)) continue;
+            const nd = ndviAt(c, ll);
+            if (nd != null && nd > 0.22) continue; // a tree over the roof
+            out.push(v);
+        }
+        return out.sort((a, b) => a - b);
+    };
+    const pct = (a: number[], q: number) => a[Math.min(a.length - 1, Math.max(0, Math.floor(q * (a.length - 1))))];
 
     // ------------------------------------------------ buildings
     const footprints: P2[][] = [];
-    for (const b of osm.buildings) {
-        let ring = b.ring.slice(0, -1).map(L);
-        if (ring.length < 3) continue;
-        if (signedArea(ring) < 0) ring = ring.reverse(); // counter-clockwise
+    /** One building: walls from the footprint, roof by shape. `measured` = lidar wall and ridge heights. */
+    const addBuilding = (ringIn: P2[], t: Record<string, string>, id: number, measured: { wall: number; rise: number; flat: boolean } | null) => {
+        let ring = ringIn;
+        if (signedArea(ring) < 0) ring = ring.slice().reverse(); // counter-clockwise
         const area = Math.abs(signedArea(ring));
-        if (area < 8 || area > 25000) continue;
-        const near = Math.min(...ring.map((p) => roadDist(p)));
-        if (near < clearRoad || P.some((p, i) => i % 5 === 0 && inRing(p, ring))) continue; // never on the road
-        footprints.push(ring);
-        const t = b.tags, kind = t.building;
-        const rnd = hash(b.id);
+        const kind = t.building ?? 'yes';
+        const rnd = hash(id);
         const barn = /^(barn|farm_auxiliary|shed|stable|cowshed|greenhouse)$/.test(kind);
         const big = /^(commercial|industrial|retail|warehouse|supermarket|school|hospital|office|apartments)$/.test(kind) || area > 700;
         const small = /^(garage|garages|carport|shed|hut)$/.test(kind) || area < 45;
         const levels = parseFloat(t['building:levels'] ?? '') || (small ? 1 : big ? 2 : area > 140 && rnd > 0.6 ? 2 : 1);
-        const wallH = parseFloat(t.height ?? '') ? Math.max(2.5, parseFloat(t.height) * 0.75) : levels * 2.9 + 0.4;
+        const tagged = parseFloat(t.height ?? '');
+        const wallH = measured ? measured.wall : tagged ? Math.max(2.5, tagged * 0.75) : levels * 2.9 + 0.4;
         const gz = ring.map((p) => H(p));
         const base = Math.min(...gz) - 0.4, top = Math.max(...gz) + wallH;
         const centre = ring.reduce((a, p) => ({ x: a.x + p.x / ring.length, y: a.y + p.y / ring.length }), { x: 0, y: 0 });
-        const coll = near < collisionM;
+        const coll = roadDist(centre) < collisionM;
         const wmat = barn ? wallMat(BARN_COLOURS[Math.floor(rnd * 3)], 'siding', false)
             : big ? wallMat([168, 164, 156], rnd > 0.5 ? 'brick' : 'concrete', true)
             : wallMat(WALL_COLOURS[Math.floor(rnd * WALL_COLOURS.length)], small ? 'siding' : rnd > 0.85 ? 'brick' : 'siding', !small);
@@ -261,7 +342,7 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
             perim += len;
         }
         // Roof.
-        const flat = big || t['roof:shape'] === 'flat';
+        const flat = measured ? measured.flat : big || t['roof:shape'] === 'flat';
         const rmat = barn || big ? roofMat(METAL_COLOURS[Math.floor(rnd * 3)], 'metal_roof') : roofMat(ROOF_COLOURS[Math.floor(rnd * 3)], 'roof');
         const roof = meshFor(coll ? '1WALL_ROOF' : 'ROOF', centre, rmat);
         const o = obb(ring);
@@ -273,24 +354,25 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
                 roof.face([[centre.x, top + 0.05, centre.y], [a.x, top + 0.05, a.y], [c.x, top + 0.05, c.y]], [0, 1, 0], [[centre.x / 8, centre.y / 8], [a.x / 8, a.y / 8], [c.x / 8, c.y / 8]]);
             }
         } else if (rect > 0.78) {
-            // Gable over the oriented rectangle, ridge along the long axis, 0.4 m overhang, 26.6 deg pitch.
-            const ov = 0.4, hw = o.w / 2 + ov, hd = o.d / 2 + ov, rise = (o.d / 2) * 0.5;
+            // Gable over the oriented rectangle, ridge along the long axis, 0.4 m overhang (26.6 deg pitch, or lidar).
+            const ov = 0.4, hw = o.w / 2 + ov, hd = o.d / 2 + ov;
+            const rise = measured ? Math.max(0.8, Math.min(measured.rise, o.d * 0.6)) : (o.d / 2) * 0.5;
             const ax = o.ax, ay = { x: -ax.y, y: ax.x };
             const pt = (u: number, v: number, y: number): V3 => [o.c.x + ax.x * u + ay.x * v, y, o.c.y + ax.y * u + ay.y * v];
             const slope = Math.hypot(hd, rise);
-            for (const s of [-1, 1]) {
-                const nx = ay.x * s * rise, nz = ay.y * s * rise, ny = hd, nl = Math.hypot(nx, ny, nz);
-                roof.double([pt(-hw, s * hd, top - ov * 0.5), pt(hw, s * hd, top - ov * 0.5), pt(hw, 0, top + rise), pt(-hw, 0, top + rise)], [nx / nl, ny / nl, nz / nl],
+            for (const sd of [-1, 1]) {
+                const nx = ay.x * sd * rise, nz = ay.y * sd * rise, ny = hd, nl = Math.hypot(nx, ny, nz);
+                roof.double([pt(-hw, sd * hd, top - ov * (rise / (o.d / 2))), pt(hw, sd * hd, top - ov * (rise / (o.d / 2))), pt(hw, 0, top + rise), pt(-hw, 0, top + rise)], [nx / nl, ny / nl, nz / nl],
                     [[0, 0], [2 * hw / 8, 0], [2 * hw / 8, slope / 8], [0, slope / 8]]);
             }
             // Gable ends (siding) under the roof.
-            for (const s of [-1, 1]) {
-                const n: V3 = [ax.x * s, 0, ax.y * s];
-                walls.face([pt(s * o.w / 2, -o.d / 2, top), pt(s * o.w / 2, o.d / 2, top), pt(s * o.w / 2, 0, top + rise)], n, [[0, 0], [o.d / 8, 0], [o.d / 16, rise / 8]]);
+            for (const sd of [-1, 1]) {
+                const n: V3 = [ax.x * sd, 0, ax.y * sd];
+                walls.face([pt(sd * o.w / 2, -o.d / 2, top), pt(sd * o.w / 2, o.d / 2, top), pt(sd * o.w / 2, 0, top + rise)], n, [[0, 0], [o.d / 8, 0], [o.d / 16, rise / 8]]);
             }
         } else {
             // Hip: every eave edge slopes up to an apex over the centre.
-            const rise = Math.min(o.w, o.d) * 0.35;
+            const rise = measured ? Math.max(0.8, Math.min(measured.rise, Math.min(o.w, o.d) * 0.5)) : Math.min(o.w, o.d) * 0.35;
             for (let i = 0; i < ring.length; i++) {
                 const a = ring[i], c = ring[(i + 1) % ring.length];
                 const e = { x: (a.x + c.x) / 2 - centre.x, y: (a.y + c.y) / 2 - centre.y }, el = Math.hypot(e.x, e.y) || 1;
@@ -298,24 +380,150 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
                 roof.double([[a.x, top, a.y], [c.x, top, c.y], [centre.x, top + rise, centre.y]], [n[0] / nl, n[1] / nl, n[2] / nl], [[0, 0], [Math.hypot(c.x - a.x, c.y - a.y) / 8, 0], [0.5, Math.hypot(el, rise) / 8]]);
             }
         }
+        footprints.push(ring);
         stats.buildings++;
+    };
+    /** Wall and ridge heights from lidar samples in a footprint (null when too few). */
+    const measure = (samples: number[]) => {
+        if (samples.length < 10) return null;
+        const p15 = pct(samples, 0.15), p50 = pct(samples, 0.5), p95 = pct(samples, 0.95);
+        if (p95 < 1.8) return null; // nothing standing there (demolished, or a mapping error)
+        const flat = p95 - pct(samples, 0.3) < 1.0;
+        return flat ? { wall: Math.max(2.4, pct(samples, 0.9)), rise: 0, flat: true } : { wall: Math.max(2.3, Math.min(p50, p15 + 0.5)), rise: Math.max(0.8, p95 - Math.max(2.3, Math.min(p50, p15 + 0.5))), flat: false };
+    };
+    for (const b of osm.buildings) {
+        const ring = b.ring.slice(0, -1).map(L);
+        if (ring.length < 3) continue;
+        const area = Math.abs(signedArea(ring));
+        if (area < 8 || area > 25000) continue;
+        if (Math.min(...ring.map((p) => clearOfRoads(p))) < 1 || P.some((p, i) => i % 5 === 0 && inRing(p, ring))) continue; // never on a road
+        const m = measure(roofSamples(ring));
+        if (m) stats.lidarBuildings!++;
+        addBuilding(ring, b.tags, b.id, m);
     }
     const onBuilding = (p: P2) => footprints.some((r) => Math.abs(r[0].x - p.x) < 80 && Math.abs(r[0].y - p.y) < 80 && inRing(p, r));
+
+    // Unmapped buildings from lidar: tall, non-vegetation blobs outside every mapped footprint and off the roads.
+    for (const c of cells) {
+        const s = c.surface;
+        if (!s || !c.nir) continue; // without near-infrared, trees and roofs can't be told apart
+        const W = s.width, Hh = s.height, pxW = (s.bbox.east - s.bbox.west) / W, pxH = (s.bbox.north - s.bbox.south) / Hh;
+        const llOf = (k: number) => ({ lat: s.bbox.north - ((Math.floor(k / W) + 0.5) * pxH), lon: s.bbox.west + ((k % W) + 0.5) * pxW });
+        const mask = new Uint8Array(W * Hh);
+        for (let k = 0; k < W * Hh; k++) {
+            const v = s.above[k];
+            if (!(v >= 2.6) || s.cls[k] === 17 || s.cls[k] === 9) continue;
+            const ll = llOf(k), nd = ndviAt(c, ll);
+            if (nd == null || nd > 0.06) continue;
+            mask[k] = 1;
+        }
+        const seen = new Uint8Array(W * Hh);
+        const a1 = proj.toLocal(llOf(0)), a2 = proj.toLocal(llOf(W + 1));
+        const pxArea = Math.abs((a2.x - a1.x) * (a2.y - a1.y));
+        for (let k0 = 0; k0 < W * Hh; k0++) {
+            if (!mask[k0] || seen[k0]) continue;
+            const comp: number[] = [], stack = [k0]; seen[k0] = 1;
+            while (stack.length && comp.length < 6000) {
+                const k = stack.pop()!; comp.push(k);
+                const x = k % W, y = Math.floor(k / W);
+                for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= Hh) continue;
+                    const kk = ny * W + nx; if (mask[kk] && !seen[kk]) { seen[kk] = 1; stack.push(kk); }
+                }
+            }
+            const area = comp.length * pxArea;
+            if (area < 22 || area > 2500) continue;
+            const pts = comp.map((k) => proj.toLocal(llOf(k)));
+            const ctr = pts.reduce((a, p) => ({ x: a.x + p.x / pts.length, y: a.y + p.y / pts.length }), { x: 0, y: 0 });
+            if (onBuilding(ctr) || clearOfRoads(ctr) < 3) continue;
+            const o = obb(pts);
+            const w = o.w + 0.8, d = o.d + 0.8;
+            if (area / (w * d) < 0.5 || Math.min(w, d) < 3) continue; // ragged blobs are hedges, trucks or noise
+            const ax = o.ax, ay = { x: -ax.y, y: ax.x };
+            const ring = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({ x: o.c.x + ax.x * u * w / 2 + ay.x * v * d / 2, y: o.c.y + ax.y * u * w / 2 + ay.y * v * d / 2 }));
+            if (Math.min(...ring.map((p) => clearOfRoads(p))) < 1) continue;
+            const hs = comp.map((k) => s.above[k]).sort((a, b) => a - b);
+            const m = measure(hs);
+            if (!m) continue;
+            addBuilding(ring, { building: area < 45 ? 'garage' : 'yes' }, Math.round(ctr.x * 7 + ctr.y * 13), m);
+            stats.lidarBuildings!++;
+        }
+    }
 
     // ------------------------------------------------ trees
     type Tree = { p: P2; h: number; w: number; variant: number; d: number };
     const trees: Tree[] = [];
     const widthOf = (variant: number, h: number) => h * (variant === 3 ? 0.75 : variant === 2 ? 0.5 : 0.42);
-    const addTree = (p: P2, variant: number, h: number) => {
-        const d = roadDist(p, 600);
+    const addTree = (p: P2, variant: number, h: number, fixedW?: number) => {
+        const q = nearRoute(p, 600), d = q.d;
+        const half = g.halfAt(q.i);
         if (d < half + 2 || onBuilding(p)) return;
-        // The sprite must stay off the asphalt and shoulder: trees close to the road are younger (smaller).
-        const room = d - (half + 1);
-        let w = widthOf(variant, h);
+        const other = otherRoadEdge(p);
+        if (other < 0.8) return; // trunk on a street
+        // The sprite must stay off the asphalt: trees close to the road are younger (smaller); other streets may be
+        // overhung a little, as street trees are.
+        const room = Math.min(d - (half + 1), other + 1.5);
+        let w = fixedW ?? widthOf(variant, h);
         if (w / 2 > room) { h *= (room * 2) / w; w = room * 2; }
-        if (h < 4) return;
+        if (h < 3.5) return;
         trees.push({ p, h, w, variant, d });
     };
+    // 1. Lidar treetops: local maxima of height above ground where the aerial says vegetation.
+    for (const c of cells) {
+        const s = c.surface;
+        if (!s) continue;
+        const W = s.width, Hh = s.height, pxW = (s.bbox.east - s.bbox.west) / W, pxH = (s.bbox.north - s.bbox.south) / Hh;
+        const a1 = proj.toLocal({ lat: s.bbox.north, lon: s.bbox.west }), a2 = proj.toLocal({ lat: s.bbox.north - pxH, lon: s.bbox.west + pxW });
+        const mx = Math.abs(a2.x - a1.x), my = Math.abs(a2.y - a1.y); // metres per pixel
+        const llOf = (x: number, y: number) => ({ lat: s.bbox.north - (y + 0.5) * pxH, lon: s.bbox.west + (x + 0.5) * pxW });
+        // Smooth the canopy model a little (3x3) so one crown gives one top, not several.
+        const sm = new Float32Array(W * Hh).fill(NaN);
+        for (let y = 1; y < Hh - 1; y++) for (let x = 1; x < W - 1; x++) {
+            let a = 0, c2 = 0;
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const u = s.above[(y + dy) * W + x + dx]; if (Number.isFinite(u)) { a += u * (dx || dy ? 1 : 2); c2 += dx || dy ? 1 : 2; } }
+            if (c2 >= 6 && Number.isFinite(s.above[y * W + x])) sm[y * W + x] = a / c2;
+        }
+        for (let y = 1; y < Hh - 1; y++) for (let x = 1; x < W - 1; x++) {
+            const k = y * W + x, v = sm[k];
+            if (!(v >= 3.5) || s.cls[k] === 17 || s.cls[k] === 9 || s.cls[k] === 6) continue;
+            const r = Math.max(2, Math.min(6, 0.12 * v + 1.5));
+            const rx = Math.ceil(r / mx), ry = Math.ceil(r / my);
+            let isMax = true, sum = 0, cnt = 0;
+            for (let dy = -ry; dy <= ry && isMax; dy++) for (let dx = -rx; dx <= rx; dx++) {
+                if (!dx && !dy) continue;
+                const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= Hh) continue;
+                if ((dx * mx) ** 2 + (dy * my) ** 2 > r * r) continue;
+                const u = sm[yy * W + xx];
+                if (u > v || (u === v && yy * W + xx < k)) { isMax = false; break; }
+                if (Number.isFinite(u)) { sum += u; cnt++; }
+            }
+            if (!isMax) continue;
+            const ll = llOf(x, y);
+            if (c.nir) { const nd = ndviAt(c, ll); if (nd == null || nd < 0.1) continue; } // a roof corner or a pole
+            const p = L(ll);
+            // Pointed crowns (much lower around the top) are conifers; rounded ones broadleaf.
+            const ratio = cnt ? sum / cnt / v : 1;
+            const variant = ratio < 0.86 ? (hash(k + 17) < 0.2 ? 2 : hash(k) < 0.5 ? 0 : 1) : 3;
+            addTree(p, variant, v + 0.4);
+            stats.lidarTrees!++;
+        }
+    }
+    // 2. Near-infrared canopy where there is no lidar: scatter trees over dark, green pixels.
+    for (const c of cells) {
+        if (c.surface || !c.nir || !c.rgb) continue;
+        const rand = rng(c.key.length * 977 + 13);
+        const a = L({ lat: c.bbox.south, lon: c.bbox.west }), b = L({ lat: c.bbox.north, lon: c.bbox.east });
+        for (let y = a.y + 3; y < b.y; y += 6) for (let x = a.x + 3; x < b.x; x += 6) {
+            const p = { x: x + (rand() - 0.5) * 4, y: y + (rand() - 0.5) * 4 };
+            const ll = proj.toLatLon(p), nd = ndviAt(c, ll), rgb = sampleImage(c.rgb, ll);
+            if (nd == null || !rgb || nd < 0.18 || (rgb[0] + rgb[1] + rgb[2]) / 3 > 90) continue;
+            const v = rand() < 0.72 ? (rand() < 0.5 ? 0 : 1) : rand() < 0.55 ? 2 : 3;
+            addTree(p, v, v === 3 ? 12 + rand() * 8 : 20 + rand() * 14);
+            stats.canopyTrees!++;
+        }
+    }
+    // 3. OpenStreetMap woods and trees where neither covers.
+    const covered = (p: P2) => { const ll = proj.toLatLon(p); const c = cellAt(ll); return !!c && (c.surface ? surfaceCovers(ll) : !!c.nir); };
     for (const w of osm.woods) {
         const rings = w.rings.map((r) => r.map(L));
         const orchard = w.tags.landuse === 'orchard', vineyard = w.tags.landuse === 'vineyard', scrub = w.tags.natural === 'scrub';
@@ -329,7 +537,7 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
             const step = orchard ? 6 : dRow < 150 ? 6.5 : dRow < 500 ? 11 : 20;
             for (let x = x0; x < x1; x += step) {
                 const p = { x: x + (orchard ? 0 : (rand() - 0.5) * step * 0.9), y: y + (orchard ? 0 : (rand() - 0.5) * step * 0.9) };
-                if (!rings.some((r) => inRing(p, r))) continue;
+                if (!rings.some((r) => inRing(p, r)) || covered(p)) continue;
                 const v = orchard || scrub ? 3 : rand() < 0.72 ? (rand() < 0.5 ? 0 : 1) : rand() < 0.55 ? 2 : 3;
                 const h = orchard ? 4 + rand() * 2 : scrub ? 3 + rand() * 3 : v === 3 ? 12 + rand() * 8 : 22 + rand() * 16;
                 addTree(p, v, h);
@@ -337,13 +545,13 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
             y += step;
         }
     }
-    for (const t of osm.trees) addTree(L(t.at), 3, 10 + hash(t.id) * 8);
+    for (const t of osm.trees) { const p = L(t.at); if (!covered(p)) addTree(p, 3, 10 + hash(t.id) * 8); }
     // Tree rows (barrier list) become lines of trees.
     for (const b of osm.barriers.filter((b) => b.tags.barrier === 'tree_row')) {
         const line = b.line.map(L);
         for (let i = 0; i < line.length - 1; i++) {
             const a = line[i], c = line[i + 1], len = Math.hypot(c.x - a.x, c.y - a.y);
-            for (let s = 0; s < len; s += 8) addTree({ x: a.x + ((c.x - a.x) * s) / len, y: a.y + ((c.y - a.y) * s) / len }, 3, 9 + hash(b.id + s) * 6);
+            for (let s = 0; s < len; s += 8) { const p = { x: a.x + ((c.x - a.x) * s) / len, y: a.y + ((c.y - a.y) * s) / len }; if (!covered(p)) addTree(p, 3, 9 + hash(b.id + s) * 6); }
         }
     }
     // Thin the farthest first if over budget.
@@ -367,7 +575,7 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
                     [[u0, 0], [u1, 0], [u1, 1], [u0, 1]], undefined, [0, 1, 0]);
             }
             // Trees inside the drivable corridor get a hidden trunk to hit.
-            if (t.d < half + 45) box(meshFor('1WALL_TRUNKS', t.p, mat, { visible: false, castShadows: false }), [t.p.x, y, t.p.y], [1, 0, 0], 0.5, 0.5, 3);
+            if (t.d < g.halfAt(nearRoute(t.p, 200).i) + 45) box(meshFor('1WALL_TRUNKS', t.p, mat, { visible: false, castShadows: false }), [t.p.x, y, t.p.y], [1, 0, 0], 0.5, 0.5, 3);
         }
         stats.trees = kept.length;
     }
@@ -395,7 +603,7 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
             for (let k = 0; k < steps; k++) {
                 const p0 = { x: a.x + ((c.x - a.x) * k) / steps, y: a.y + ((c.y - a.y) * k) / steps };
                 const p1 = { x: a.x + ((c.x - a.x) * (k + 1)) / steps, y: a.y + ((c.y - a.y) * (k + 1)) / steps };
-                if (roadDist(p0, 50) < clearRoad - 1 || roadDist(p1, 50) < clearRoad - 1) continue; // gaps where it would cross the road
+                if (clearOfRoads(p0) < 1.5 || clearOfRoads(p1) < 1.5) continue; // gaps where it would cross a road
                 const y0 = H(p0), y1 = H(p1), n: V3 = [(p1.y - p0.y) / (len / steps), 0, -(p1.x - p0.x) / (len / steps)];
                 const m = meshFor(coll ? '1WALL_BAR' : 'BAR', p0, spec.mat);
                 const segL = len / steps, u0 = (k * segL) / 8, u1 = ((k + 1) * segL) / 8;

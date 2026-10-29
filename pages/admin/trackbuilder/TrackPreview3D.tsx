@@ -18,6 +18,7 @@ import type { ElementBuild } from '../../../tools/trackbuilder/elements.ts';
 import type { MeshPart } from '../../../tools/trackbuilder/mesh.ts';
 import type { Kn5Material, Kn5Texture } from '../../../tools/trackbuilder/kn5.ts';
 import { decodeDds } from '../../../tools/trackbuilder/dds.ts';
+import { laneGeometry } from '../../../tools/trackbuilder/roadinfo.ts';
 
 export interface TrackPick { s: number; lateral: number; index: number }
 
@@ -135,7 +136,10 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
             if (map) map.colorSpace = THREE.SRGBColorSpace;
             // Alpha-tested (tree billboards): cut out at 0.5 like AC's ksAlphaRef.
             const cut = m.alphaTested || m.shader === 'ksPerPixelAT';
-            matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide, alphaTest: cut ? 0.5 : 0, transparent: false }));
+            // Lit parts (signal lenses, street lights) glow as in AC (ksEmissive multiplies the texture).
+            const em = m.properties.find((p) => p.name === 'ksEmissive')?.c ?? [0, 0, 0];
+            const glow = Math.max(...em) > 0 ? new THREE.Color(Math.min(1, em[0] / 20), Math.min(1, em[1] / 20), Math.min(1, em[2] / 20)) : null;
+            matByName.set(m.name, new THREE.MeshLambertMaterial({ map: map ?? null, color: map ? 0xffffff : 0x888888, side: THREE.DoubleSide, alphaTest: cut ? 0.5 : 0, transparent: false, ...(glow ? { emissive: glow, emissiveMap: map ?? null } : {}) }));
         }
     }
     for (const p of parts) {
@@ -198,7 +202,8 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
     props.current = { build, picking, onPick, groundPrompt };
 
     const cl = build.centerline;
-    const defaultLat = cl.closed ? 0 : build.geometry.width / 4; // right-hand lane on a road
+    // NaN = follow the right-hand travel lane (it moves as lanes come and go); a number = fixed offset.
+    const defaultLat = cl.closed ? 0 : NaN;
 
     // ---- helpers over the centreline (AC space)
     const helpers = useRef({
@@ -210,9 +215,18 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
             return lo;
         },
         /** Eye position (three space) at distance s, lateral offset lat. */
-        eye(s: number, lat: number): THREE.Vector3 {
+        /** Centre of the right-hand travel lane at sample i (from the OSM lanes when known). */
+        laneLat(i: number): number {
+            const b = props.current.build, h = b.geometry.halfAt ? b.geometry.halfAt(i) : b.geometry.width / 2;
+            const ls = b.road?.lanes[i];
+            if (!ls) return h / 2;
+            const g = laneGeometry(h, ls, false);
+            return g.fwdLane(Math.max(0, ls.fwd - 1));
+        },
+        eye(s: number, latIn: number): THREE.Vector3 {
             const b = props.current.build, c = b.centerline;
             const i = this.index(s);
+            const lat = Number.isNaN(latIn) ? this.laneLat(i) : latIn;
             const t = c.tangents[i], p = c.points[i];
             const x = p.x + t.y * lat, z = p.y - t.x * lat;
             return new THREE.Vector3(x, b.geometry.surfaceAt(i, lat) + EYE, -z);
@@ -330,7 +344,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
             const p = hit(e); if (!p) return;
             const pick = helpers.current.pickFromPoint(p);
             if (props.current.picking) props.current.onPick(pick);
-            else if (props.current.groundPrompt) { const hw = props.current.build.geometry.width / 2; enterGroundRef.current(pick.s, Math.max(-hw, Math.min(hw, pick.lateral))); }
+            else if (props.current.groundPrompt) { const g = props.current.build.geometry, i = helpers.current.index(pick.s), hw = g.halfAt ? g.halfAt(i) : g.width / 2; enterGroundRef.current(pick.s, Math.max(-hw, Math.min(hw, pick.lateral))); }
         };
         const onDbl = (e: MouseEvent) => {
             if (props.current.picking) return;
@@ -400,7 +414,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
     useEffect(() => {
         const t = three.current; if (!t) return;
         t.base?.dispose(); if (t.base) t.scene.remove(t.base.group);
-        t.base = groupFrom([...build.geometry.parts, ...build.terrain, ...(build.features ?? [])], build.materials, build.textures, t.renderer);
+        t.base = groupFrom([...build.geometry.parts, ...build.terrain, ...(build.features ?? []), ...(build.bridges ?? []), ...(build.streets ?? [])], build.materials, build.textures, t.renderer);
         t.scene.add(t.base.group);
         // Route highlight for the overview: a fat red line just above the road, drawn on top.
         if (t.route) { t.scene.remove(t.route); t.route.geometry.dispose(); (t.route.material as LineMaterial).dispose(); }

@@ -8,9 +8,12 @@ import { decodeSite, demToPng, fetchSiteBytes, planSite, pngToDem } from '../../
 import type { SitePlan, SiteRasters } from '../../../tools/trackbuilder/site.ts';
 import type { LatLon } from '../../../tools/trackbuilder/geo.ts';
 import type { Rgba } from '../../../tools/trackbuilder/dds.ts';
-import { fetchOsm } from '../../../tools/trackbuilder/osm.ts';
+import { OSM_VERSION, fetchOsm } from '../../../tools/trackbuilder/osm.ts';
 import type { OsmFeatures } from '../../../tools/trackbuilder/osm.ts';
 import { gunzipSync, gzipSync } from 'fflate';
+import { fetchSurfaces, pngsToSurface, surfaceToPngs } from '../../../tools/trackbuilder/lidar.ts';
+import type { LazPerfModule, SurfaceMeta } from '../../../tools/trackbuilder/lidar.ts';
+import lazWasmUrl from 'laz-perf/lib/web/laz-perf.wasm?url';
 
 const ROOT = 'trackbuilder/sites';
 
@@ -49,7 +52,8 @@ export async function ensureSite(line: LatLon[], log: (m: string) => void): Prom
     const siteId = await siteIdFor(line);
     const existing = await loadSite(siteId, log).catch(() => null);
     if (existing) {
-        await attachOsm(existing, siteId, log, true);
+        await attachOsm(existing, siteId, line, log, true);
+        await attachSurfaces(existing, siteId, line, log, true);
         return { site: existing, siteId, stored: true, fresh: false };
     }
 
@@ -93,7 +97,8 @@ export async function ensureSite(line: LatLon[], log: (m: string) => void): Prom
         stored = false;
         log(`Couldn't save the site data (${(e as { code?: string }).code ?? (e as Error).message}); it is used for this session only`);
     }
-    await attachOsm(site, siteId, log, stored);
+    await attachOsm(site, siteId, line, log, stored);
+    await attachSurfaces(site, siteId, line, log, stored);
     return { site, siteId, stored, fresh: true };
 }
 
@@ -102,20 +107,22 @@ export async function ensureSite(line: LatLon[], log: (m: string) => void): Prom
  * the rasters. Sites saved before this existed get it on their next load. A failed fetch leaves the site without
  * map features (the track still builds) and is retried next time.
  */
-async function attachOsm(site: SiteRasters, siteId: string, log: (m: string) => void, store: boolean) {
-    if (site.osm || !site.overview) return;
+async function attachOsm(site: SiteRasters, siteId: string, line: LatLon[], log: (m: string) => void, store: boolean) {
+    if ((site.osm?.version ?? 0) >= OSM_VERSION || !site.overview) return;
     const path = `${ROOT}/${siteId}/osm.json.gz`;
     try {
-        site.osm = JSON.parse(new TextDecoder().decode(gunzipSync(new Uint8Array(await getBytes(ref(storage, path)))))) as OsmFeatures;
-        return;
+        const stored = JSON.parse(new TextDecoder().decode(gunzipSync(new Uint8Array(await getBytes(ref(storage, path)))))) as OsmFeatures;
+        site.osm = stored;
+        if ((stored.version ?? 1) >= OSM_VERSION) return;
+        log('Stored map features are from an older version; fetching roads, signals and signs too');
     } catch (e) {
         if ((e as { code?: string }).code !== 'storage/object-not-found') { log(`Couldn't read stored map features (${(e as Error).message}); fetching again`); }
     }
     try {
         log('Fetching buildings, woods and barriers from OpenStreetMap');
-        const osm = await fetchOsm((u, i) => fetch(u, i), site.overview.bbox);
+        const osm = await fetchOsm((u, i) => fetch(u, i), site.overview.bbox, line);
         site.osm = osm;
-        log(`  ${osm.buildings.length} buildings, ${osm.woods.length} woods, ${osm.trees.length} single trees, ${osm.barriers.length} barriers`);
+        log(`  ${osm.buildings.length} buildings, ${osm.woods.length} woods, ${osm.trees.length} single trees, ${osm.barriers.length} barriers, ${osm.roads?.length ?? 0} roads, ${osm.points?.length ?? 0} signals, signs and lamps`);
         if (store) {
             await uploadBytes(ref(storage, path), gzipSync(new TextEncoder().encode(JSON.stringify(osm)), { level: 9 }), { contentType: 'application/gzip', cacheControl: 'no-cache' })
                 .catch((e) => log(`Couldn't save the map features (${(e as { code?: string }).code ?? (e as Error).message})`));
@@ -151,3 +158,56 @@ export function loadSite(siteId: string, log?: (m: string) => void): Promise<Sit
 }
 
 export { pngToDem };
+
+let lazPerf: Promise<LazPerfModule> | null = null;
+function loadLazPerf(): Promise<LazPerfModule> {
+    lazPerf ??= import('laz-perf').then((m) => {
+        // CommonJS package: the factory may sit on the namespace or on its default export depending on the bundler.
+        const mod = m as unknown as { createLazPerf?: unknown; default?: { createLazPerf?: unknown } };
+        const create = (mod.createLazPerf ?? mod.default?.createLazPerf) as (o: object) => Promise<LazPerfModule>;
+        return create({ locateFile: () => lazWasmUrl });
+    });
+    return lazPerf;
+}
+
+/**
+ * Lidar surface (height above ground + what was hit) along the corridor, from the 3DEP point cloud: stored per cell
+ * as surface.png and class.png with a surface.json listing them. Sites saved before this get it on their next load;
+ * when no point cloud covers the road (or the fetch fails) the build estimates heights as before.
+ */
+async function attachSurfaces(site: SiteRasters, siteId: string, line: LatLon[], log: (m: string) => void, store: boolean) {
+    if (site.cells.some((c) => c.surface)) return;
+    const metaPath = `${ROOT}/${siteId}/surface.json`;
+    try {
+        const meta = JSON.parse(new TextDecoder().decode(await getBytes(ref(storage, metaPath)))) as SurfaceMeta & { none?: boolean };
+        if (meta.none) return;
+        await Promise.all(site.cells.filter((c) => meta.cells.includes(c.key)).map(async (c) => {
+            const [a, k] = await Promise.all([`${c.key}/surface.png`, `${c.key}/class.png`].map(async (f) => new Uint8Array(await getBytes(ref(storage, `${ROOT}/${siteId}/${f}`)))));
+            c.surface = pngsToSurface(a, k, c.bbox);
+        }));
+        return;
+    } catch (e) {
+        if ((e as { code?: string }).code !== 'storage/object-not-found') log(`Couldn't read the stored lidar surface (${(e as Error).message}); fetching it again`);
+    }
+    try {
+        const lp = await loadLazPerf();
+        const res = await fetchSurfaces((u, i) => fetch(u, i), lp, site, line, log);
+        if (!res) {
+            if (store) await uploadBytes(ref(storage, metaPath), new TextEncoder().encode(JSON.stringify({ version: 1, none: true, cells: [] })), { contentType: 'application/json' }).catch(() => {});
+            return;
+        }
+        for (const c of site.cells) { const sfc = res.surfaces.get(c.key); if (sfc) c.surface = sfc; }
+        log(`Lidar surface ready (${res.meta.workunit.replace(/_/g, ' ')}): real building and tree heights`);
+        if (!store) return;
+        const uploads: Promise<unknown>[] = [];
+        for (const [key, sfc] of res.surfaces) {
+            const p = surfaceToPngs(sfc);
+            uploads.push(uploadBytes(ref(storage, `${ROOT}/${siteId}/${key}/surface.png`), p.above, { contentType: 'image/png', cacheControl: 'public, max-age=31536000, immutable' }));
+            uploads.push(uploadBytes(ref(storage, `${ROOT}/${siteId}/${key}/class.png`), p.cls, { contentType: 'image/png', cacheControl: 'public, max-age=31536000, immutable' }));
+        }
+        await Promise.all(uploads);
+        await uploadBytes(ref(storage, metaPath), new TextEncoder().encode(JSON.stringify(res.meta)), { contentType: 'application/json', cacheControl: 'no-cache' });
+    } catch (e) {
+        log(`Lidar point cloud unavailable (${(e as Error).message}); building and tree heights will be estimated this time`);
+    }
+}

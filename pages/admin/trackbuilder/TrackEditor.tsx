@@ -14,8 +14,10 @@ import type { NetOptions, Place, Raceway } from '../../../tools/trackbuilder/fet
 import type { HeightSampler, TilePixels } from '../../../tools/trackbuilder/elevation.ts';
 import type { LatLon } from '../../../tools/trackbuilder/geo.ts';
 import { parseTrace, rotateLoopTo } from '../../../tools/trackbuilder/trace.ts';
-import { buildTrack } from '../../../tools/trackbuilder/pack.ts';
 import type { BuildResult } from '../../../tools/trackbuilder/pack.ts';
+import { fromPortable } from '../../../tools/trackbuilder/portable.ts';
+import type { PortableBuild } from '../../../tools/trackbuilder/portable.ts';
+import type { BridgeStructure } from '../../../tools/trackbuilder/roadinfo.ts';
 import { buildElements, elementId } from '../../../tools/trackbuilder/elements.ts';
 import type { TrackElement } from '../../../tools/trackbuilder/elements.ts';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -109,6 +111,8 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const sampler = useRef<{ key: string; fn: HeightSampler; z: number; tiles: Map<string, TilePixels> } | null>(null);
     // Real ground: 1 m lidar + aerial imagery for the route, stored in Firebase and reused.
     const [realGround, setRealGround] = useState(initial.realGround ?? true);
+    // Bridge structure per OSM way (OSM rarely records it): beam, arch or truss.
+    const [bridgeStyles, setBridgeStyles] = useState<Record<string, BridgeStructure>>(initial.bridgeStyles ?? {});
     const [siteId, setSiteId] = useState<string | null>(initial.siteId ?? null);
     const [siteNote, setSiteNote] = useState('');
     const siteRef = useRef<{ id: string; site: SiteRasters } | null>(null);
@@ -282,36 +286,39 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
         }
         return { polyline, fn: sampler.current.fn };
     };
-    const buildWith = (polyline: LatLon[], fn: HeightSampler, withElements: boolean) => buildTrack({
-        name: name.trim() || 'Track', polyline, heightSampler: fn, width: widthM(), walls,
+    /** Build inputs as plain data (the worker can't take functions). */
+    const plainInput = (polyline: LatLon[], withElements: boolean) => ({
+        name: name.trim() || 'Track', polyline, width: widthM(), walls,
         flipStart: flip, circuit: kind === 'circuit', reverse, gridSlots: parseInt(gridSlots, 10) || 12,
         city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements: withElements ? elements : elements.filter((e) => e.type === 'lines'),
-        library: library.current ?? undefined, log: (m) => setLog((l) => [...l, m]),
-        site: realGround ? siteRef.current?.site : undefined,
-        // The preview needs geometry and materials only; the download packs the full track.
-        output: withElements ? 'full' : 'geometry',
+        library: library.current ?? undefined, site: realGround ? siteRef.current?.site : undefined, bridgeStyles,
     });
+    /** The preview (geometry and materials only) builds in the worker too, so long roads never freeze the page. */
+    const previewBuild = async (polyline: LatLon[]) => {
+        const s = sampler.current!;
+        const res = await runHeavy<PortableBuild>('buildPreview', { input: plainInput(polyline, false), z: s.z, tiles: s.tiles }, [], (m) => setLog((l) => [...l, m]));
+        return fromPortable(res);
+    };
 
     const buildPreview = async () => {
         setBusy('preview'); setLog([]); setError(null);
         try {
-            const { polyline, fn } = await buildInputs();
-            await new Promise((r) => setTimeout(r, 0));
-            setBase(buildWith(polyline, fn, false));
+            const { polyline } = await buildInputs();
+            setBase(await previewBuild(polyline));
         } catch (e) { setError((e as Error).message); } finally { setBusy(''); }
     };
 
     // Rebuild the base when options that change its shape change (keeps the preview honest).
     // Centre-line stretches change the road markings, which are part of the base geometry.
     const linesKey = JSON.stringify(elements.filter((e) => e.type === 'lines'));
-    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}`;
+    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}|${JSON.stringify(bridgeStyles)}`;
     const lastOpts = useRef(optsKey);
     useEffect(() => {
         if (lastOpts.current === optsKey) return;
         lastOpts.current = optsKey;
         if (base && line && sampler.current) {
             if (realGround && !siteRef.current) buildPreview(); // fetch the site first
-            else setBase(buildWith(line, sampler.current.fn, false));
+            else { setBusy('preview'); previewBuild(line).then(setBase, (e) => setError((e as Error).message)).finally(() => setBusy('')); }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [optsKey]);
@@ -327,11 +334,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             const { polyline } = await buildInputs();
             // The full build (aerial textures, DDS encoding, KN5, zip) runs in a worker so the page stays live.
             const s = sampler.current!;
-            const input = {
-                name: name.trim() || 'Track', polyline, width: widthM(), walls, flipStart: flip, circuit: kind === 'circuit', reverse,
-                gridSlots: parseInt(gridSlots, 10) || 12, city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements,
-                library: library.current ?? undefined, site: realGround ? siteRef.current?.site : undefined,
-            };
+            const input = plainInput(polyline, true);
             const res = await runHeavy<{ zip: Uint8Array; id: string }>('buildTrack', { input, z: s.z, tiles: s.tiles }, [], (m) => setLog((l) => [...l, m]));
             const url = URL.createObjectURL(new Blob([res.zip], { type: 'application/zip' }));
             const a = document.createElement('a');
@@ -347,7 +350,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             const id = await saveProject({
                 id: projectId, name: name.trim() || 'Untitled track', kind,
                 pins: pins ?? [], loop, line, width: parseFloat(width) || null, walls, flipStart: flip, reverse,
-                gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined, siteId, realGround,
+                gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined, siteId, realGround, bridgeStyles,
                 stats: base ? { lengthM: base.stats.lengthM, climbM: base.stats.climbM } : (initial.stats ?? null),
             }, currentUser?.email);
             if (!projectId) { setProjectId(id); navigate(`/admin/track-builder?id=${id}`, { replace: true }); }
@@ -481,6 +484,25 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                     </button>
                     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={realGround} onChange={(e) => { setRealGround(e.target.checked); touch(); }} /> Real ground (1 m lidar + aerial photo)</label>
                     <p className="text-[11px] text-white/40">{libStatus}{siteNote ? <><br />{siteNote}</> : null}</p>
+                    {base?.road?.bridges.length ? (
+                        <div className="space-y-1">
+                            <p className="text-xs text-white/50">Bridges (pick how each is built; check Street View)</p>
+                            {base.road.bridges.map((b) => (
+                                <label key={b.wayId} className="flex items-center justify-between gap-2 text-sm">
+                                    <span className="truncate">{b.name} <span className="text-white/40">({Math.round(b.to - b.from)} m)</span></span>
+                                    <select value={bridgeStyles[String(b.wayId)] ?? b.structure} onChange={(e) => { setBridgeStyles((v) => ({ ...v, [String(b.wayId)]: e.target.value as BridgeStructure })); touch(); }}
+                                        className="bg-black/40 border border-white/10 rounded px-2 py-1 text-sm">
+                                        <option value="beam">Beam (girders on piers)</option>
+                                        <option value="arch">Arch</option>
+                                        <option value="truss">Steel truss</option>
+                                    </select>
+                                </label>
+                            ))}
+                        </div>
+                    ) : null}
+                    {base?.streetStats && (
+                        <p className="text-[11px] text-white/40">From OpenStreetMap: {base.streetStats.signals} signal poles, {base.streetStats.stopSigns} stop signs, {base.streetStats.crosswalks} crosswalks, {base.streetStats.speedSigns} speed signs, {base.streetStats.lamps} street lights, {base.streetStats.stubs} side streets. Add missing signs with the scenery tools.</p>
+                    )}
                     {log.length > 0 && <div className="bg-black/40 rounded-lg p-3 text-[11px] font-mono text-white/50 max-h-32 overflow-auto">{log.map((l, i) => <div key={i}>{l}</div>)}</div>}
                     {base && (
                         <dl className="grid grid-cols-2 gap-2 text-sm">
