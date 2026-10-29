@@ -135,7 +135,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         const pxW = (s.bbox.east - s.bbox.west) / W, pxH = (s.bbox.north - s.bbox.south) / Hh;
         for (let y = 2; y < Hh - 2; y++) for (let x = 2; x < W - 2; x++) {
             const v = s.above[y * W + x];
-            if (!(v >= 7 && v <= 17) || s.cls[y * W + x] === 17) continue;
+            if (!(v >= 9.5 && v <= 17) || s.cls[y * W + x] === 17) continue; // lower ones are mostly street lights
             let isMax = true, low = 0, ring = 0;
             for (let dy = -2; dy <= 2 && isMax; dy++) for (let dx = -2; dx <= 2; dx++) {
                 if (!dx && !dy) continue;
@@ -158,21 +158,6 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         const nrm = { x: -pl.dir.y, y: pl.dir.x }; // arm across the line
         return { a: { x: pl.p.x - nrm.x * 1.2, y: pl.p.y - nrm.y * 1.2 }, b: { x: pl.p.x + nrm.x * 1.2, y: pl.p.y + nrm.y * 1.2 }, nrm };
     };
-    for (const pl of poles) {
-        const m = mesh('RS_POLES', pl.p, woodM);
-        post(m, [pl.p.x, pl.y - 0.3, pl.p.y], 0.17, 0.12, pl.h + 0.3);
-        const arm = crossarm(pl), ay = pl.y + pl.h - 0.6;
-        box(m, [pl.p.x, ay, pl.p.y], [arm.nrm.x, 0, arm.nrm.y], 0.1, 2.4, 0.1);
-        const ins = mesh('RS_INSUL', pl.p, insulM);
-        for (const f of [-1, 0, 1]) box(ins, [pl.p.x + arm.nrm.x * f * 1.05, ay + 0.1, pl.p.y + arm.nrm.y * f * 1.05], [arm.nrm.x, 0, arm.nrm.y], 0.08, 0.08, 0.22);
-        // Telephone / cable bracket lower down, and a transformer can on some.
-        box(mesh('RS_METAL', pl.p, metalM), [pl.p.x, pl.y + pl.h - 3.4, pl.p.y], [arm.nrm.x, 0, arm.nrm.y], 0.06, 0.5, 0.06);
-        if (hash2(pl.p.x, pl.p.y) < 0.22) post(mesh('RS_METAL', pl.p, metalM), [pl.p.x + arm.nrm.x * 0.35, pl.y + pl.h - 2.6, pl.p.y + arm.nrm.y * 0.35], 0.28, 0.28, 0.95, 8);
-        const q = nearest(pl.p, 40);
-        if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + 4) box(hit(pl.p), [pl.p.x, pl.y, pl.p.y], [1, 0, 0], 0.4, 0.4, 3);
-        stats.poles++;
-    }
-
     // ------------------------------------------------ wires
     /** A sagging wire from a to b (both V3), a thin crossed ribbon so it shows from any angle. */
     const wire = (a: V3, b: V3, sag: number, thick = 0.025) => {
@@ -199,8 +184,8 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         wire([a.p.x, a.y + a.h - 3.4, a.p.y], [b.p.x, b.y + b.h - 3.4, b.p.y], d * 0.025, 0.035); // telephone / cable
         stats.wires++;
     };
-    const joined = new Set<string>();
-    const join = (a: Pole, b: Pole) => { const k = [poles.indexOf(a), poles.indexOf(b)].sort().join(','); if (joined.has(k)) return; joined.add(k); span(a, b); };
+    const joined = new Set<string>(), spans: [Pole, Pole][] = [], wired = new Set<Pole>();
+    const join = (a: Pole, b: Pole) => { const k = [poles.indexOf(a), poles.indexOf(b)].sort().join(','); if (joined.has(k)) return; joined.add(k); spans.push([a, b]); wired.add(a); wired.add(b); };
     // Mapped lines: consecutive vertices that are poles.
     for (const ln of osm?.power ?? []) {
         const pts = ln.line.map(L);
@@ -219,6 +204,25 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
             if (d > 18 && d < 75) { a.dir = b.dir = norm2({ x: b.p.x - a.p.x, y: b.p.y - a.p.y }); join(a, b); }
         }
     }
+
+    // A lidar spike with no neighbour to string a wire to is more likely a lamp, sign or flagpole: drop it.
+    for (let k = poles.length - 1; k >= 0; k--) if (poles[k].lidar && !wired.has(poles[k])) { poles.splice(k, 1); stats.lidarPoles--; }
+    for (const pl of poles) {
+        const m = mesh('RS_POLES', pl.p, woodM);
+        post(m, [pl.p.x, pl.y - 0.3, pl.p.y], 0.17, 0.12, pl.h + 0.3);
+        const arm = crossarm(pl), ay = pl.y + pl.h - 0.6;
+        box(m, [pl.p.x, ay, pl.p.y], [arm.nrm.x, 0, arm.nrm.y], 0.1, 2.4, 0.1);
+        const ins = mesh('RS_INSUL', pl.p, insulM);
+        for (const f of [-1, 0, 1]) box(ins, [pl.p.x + arm.nrm.x * f * 1.05, ay + 0.1, pl.p.y + arm.nrm.y * f * 1.05], [arm.nrm.x, 0, arm.nrm.y], 0.08, 0.08, 0.22);
+        // Telephone / cable bracket lower down, and a transformer can on some.
+        box(mesh('RS_METAL', pl.p, metalM), [pl.p.x, pl.y + pl.h - 3.4, pl.p.y], [arm.nrm.x, 0, arm.nrm.y], 0.06, 0.5, 0.06);
+        if (hash2(pl.p.x, pl.p.y) < 0.22) post(mesh('RS_METAL', pl.p, metalM), [pl.p.x + arm.nrm.x * 0.35, pl.y + pl.h - 2.6, pl.p.y + arm.nrm.y * 0.35], 0.28, 0.28, 0.95, 8);
+        const q = nearest(pl.p, 40);
+        if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + 4) box(hit(pl.p), [pl.p.x, pl.y, pl.p.y], [1, 0, 0], 0.4, 0.4, 3);
+        stats.poles++;
+    }
+
+    for (const [a, b] of spans) span(a, b);
 
     // ------------------------------------------------ hydrants
     const hydrant = (p: P2) => {

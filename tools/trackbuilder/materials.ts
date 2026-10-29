@@ -256,6 +256,8 @@ export interface MacroDetailSpec {
     specularExp?: number;
     reflection?: number;
     detailNormal?: number;
+    /** Alpha-tested (ksPerPixelMultiMap_AT_NMDetail): macro alpha below 0.5 cuts holes (worn paint). */
+    cutout?: boolean;
 }
 
 /**
@@ -267,17 +269,17 @@ export function macroDetailMaterial(book: MaterialBook, lib: MaterialLibrary | u
     if (book.has(spec.name)) return spec.name;
     const e = entryFor(lib, spec.role);
     const lp = e.source.provider === 'polyhaven' ? `${e.source.asset}` : `proc_${e.role}`;
-    const txDiffuse = book.image(`${spec.macro.key}.dds`, spec.macro.image, { format: spec.macro.format ?? 'bc3' });
+    const txDiffuse = book.image(`${spec.macro.key}.dds`, spec.macro.image, { format: spec.macro.format ?? 'bc3', ...(spec.cutout ? { mips: 'cutout' as const } : {}) });
     const txDetail = book.texture(`${lp}_detail.dds`, e.detail);
     const txNormalDetail = book.texture(`${lp}_normal.dds`, e.normal);
     const txNormal = book.texture('flat_normal.dds', FLAT_NORMAL);
     const txMaps = spec.maps ? book.image(`${spec.maps.key}.dds`, spec.maps.image, { mips: 'linear' }) : book.texture(`${lp}_maps.dds`, e.maps);
     return book.add({
-        name: spec.name, shader: 'ksPerPixelMultiMap_NMDetail',
+        name: spec.name, shader: spec.cutout ? 'ksPerPixelMultiMap_AT_NMDetail' : 'ksPerPixelMultiMap_NMDetail', ...(spec.cutout ? { alphaTested: true } : {}),
         properties: [
             { name: 'ksAmbient', a: 0.4 }, { name: 'ksDiffuse', a: 0.6 },
             { name: 'ksSpecular', a: spec.specular ?? 0.15 }, { name: 'ksSpecularEXP', a: spec.specularExp ?? 25 },
-            { name: 'ksEmissive', c: [0, 0, 0] }, { name: 'ksAlphaRef', a: 0 },
+            { name: 'ksEmissive', c: [0, 0, 0] }, { name: 'ksAlphaRef', a: spec.cutout ? 0.5 : 0 },
             { name: 'fresnelC', a: 0.02 }, { name: 'fresnelEXP', a: 4 }, { name: 'fresnelMaxLevel', a: spec.reflection ?? 0.12 },
             { name: 'useDetail', a: 1 }, { name: 'detailUVMultiplier', a: spec.macro.sizeM / e.tileM },
             { name: 'detailNormalBlend', a: spec.detailNormal ?? 1 },
@@ -373,15 +375,26 @@ export function roadMacro(widthM: number, sizeM: number, target: [number, number
     return { image: { width: size, height: size, data: img }, maps: { width: size, height: size, data: maps } };
 }
 
-/** Road paint macro: worn paint colour with a little grain, over the asphalt detail. */
+/**
+ * Road paint macro: worn paint. Colour with grain and grime; alpha both blends in a little asphalt detail and,
+ * below 0.5, cuts the paint away entirely (alpha-tested), so worn spots and scuffs show bare asphalt.
+ */
 export function paintMacro(rgb: [number, number, number], seed: number): Rgba {
-    const size = 128, n = tileNoise(size, seed, [8, 32, 64]);
+    const size = 256, n = tileNoise(size, seed, [8, 32, 64]), fine = tileNoise(size, seed + 7, [64, 128]);
+    const rand = rng(seed);
+    // Scuffs: short streaks along the road (v) where tyres wore the paint.
+    const scuffs = Array.from({ length: 14 }, () => ({ u: rand(), v: rand(), len: 0.05 + rand() * 0.15, w: 0.01 + rand() * 0.02 }));
     const data = new Uint8Array(size * size * 4);
-    for (let i = 0; i < size * size; i++) {
-        const wear = 0.85 + n[i] * 0.3;
-        for (let c = 0; c < 3; c++) data[i * 4 + c] = Math.max(0, Math.min(255, rgb[c] * wear));
-        // Some detail shows through worn paint; mostly paint.
-        data[i * 4 + 3] = Math.round(255 * Math.min(1, 0.55 + n[i] * 0.5));
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const i = y * size + x, u = x / size, v = y / size;
+        const wear = 0.8 + n[i] * 0.3;
+        for (let c = 0; c < 3; c++) data[i * 4 + c] = Math.max(0, Math.min(255, rgb[c] * wear * (0.93 + fine[i] * 0.1)));
+        let a = 0.62 + n[i] * 0.5 + (fine[i] - 0.5) * 0.35;
+        for (const s of scuffs) {
+            const du = Math.min(Math.abs(u - s.u), 1 - Math.abs(u - s.u)), dv = Math.min(Math.abs(v - s.v), 1 - Math.abs(v - s.v));
+            if (du < s.w && dv < s.len) a -= 0.45 * (1 - du / s.w);
+        }
+        data[i * 4 + 3] = Math.round(255 * Math.max(0, Math.min(0.85, a)));
     }
     return { width: size, height: size, data };
 }

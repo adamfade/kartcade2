@@ -80,12 +80,12 @@ function textureFrom(t: Kn5Texture, renderer: THREE.WebGLRenderer): THREE.Textur
  * ksPerPixelMultiMap_NMDetail as AC blends it: colour = macro.rgb * lerp(detail.rgb, 1, macro.a), lit in
  * gamma space (AC doesn't linearise textures), plus the scene fog.
  */
-function macroDetailMaterial(macro: THREE.Texture | undefined, detail: THREE.Texture | undefined, detailMult: number, lights: Lights): THREE.ShaderMaterial {
+function macroDetailMaterial(macro: THREE.Texture | undefined, detail: THREE.Texture | undefined, detailMult: number, lights: Lights, cutout = false): THREE.ShaderMaterial {
     return new THREE.ShaderMaterial({
         fog: true,
         side: THREE.DoubleSide,
         uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
-            macro: { value: macro ?? null }, detail: { value: detail ?? null }, detailMult: { value: detailMult },
+            macro: { value: macro ?? null }, detail: { value: detail ?? null }, detailMult: { value: detailMult }, cutout: { value: cutout ? 1 : 0 },
             sunDir: { value: lights.sunDir }, sunCol: { value: lights.sunCol }, skyCol: { value: lights.skyCol }, groundCol: { value: lights.groundCol },
         }]),
         vertexShader: `
@@ -98,12 +98,13 @@ function macroDetailMaterial(macro: THREE.Texture | undefined, detail: THREE.Tex
                 #include <fog_vertex>
             }`,
         fragmentShader: `
-            uniform sampler2D macro; uniform sampler2D detail; uniform float detailMult;
+            uniform sampler2D macro; uniform sampler2D detail; uniform float detailMult; uniform float cutout;
             uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyCol; uniform vec3 groundCol;
             varying vec2 vUv; varying vec3 vN;
             #include <fog_pars_fragment>
             void main() {
                 vec4 m = texture2D(macro, vUv);
+                if (cutout > 0.5 && m.a < 0.5) discard;
                 vec3 d = texture2D(detail, vUv * detailMult).rgb;
                 vec3 col = m.rgb * mix(d, vec3(1.0), m.a);
                 vec3 n = normalize(vN);
@@ -169,9 +170,9 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
         if (m.shader === 'ksMultilayer') {
             const prop = (k: string) => m.properties.find((p) => p.name === k)?.a ?? 1;
             matByName.set(m.name, multilayerMaterial(slot('txDiffuse'), slot('txMask'), ['txDetailR', 'txDetailG', 'txDetailB', 'txDetailA'].map(slot), ['multR', 'multG', 'multB', 'multA'].map(prop), LIGHTS));
-        } else if (m.shader === 'ksPerPixelMultiMap_NMDetail') {
+        } else if (m.shader === 'ksPerPixelMultiMap_NMDetail' || m.shader === 'ksPerPixelMultiMap_AT_NMDetail') {
             const mult = m.properties.find((p) => p.name === 'detailUVMultiplier')?.a ?? 1;
-            matByName.set(m.name, macroDetailMaterial(slot('txDiffuse'), slot('txDetail'), mult, LIGHTS));
+            matByName.set(m.name, macroDetailMaterial(slot('txDiffuse'), slot('txDetail'), mult, LIGHTS, m.shader === 'ksPerPixelMultiMap_AT_NMDetail'));
         } else {
             const map = slot('txDiffuse');
             if (map) map.colorSpace = THREE.SRGBColorSpace;

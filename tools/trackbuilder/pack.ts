@@ -20,6 +20,8 @@ import { levelBridges, matchRoad } from './roadinfo.ts';
 import type { BridgeStructure, RoadInfo } from './roadinfo.ts';
 import { buildBridges } from './bridge.ts';
 import { buildRoadside } from './roadside.ts';
+import { buildRoadSurface } from './roadsurface.ts';
+import type { RoadSurfaceStats } from './roadsurface.ts';
 import type { RoadsideStats } from './roadside.ts';
 import { buildStreets } from './streets.ts';
 import type { StreetStats } from './streets.ts';
@@ -96,6 +98,8 @@ export interface BuildResult {
     streetStats: StreetStats | null;
     /** Poles, wires, hydrants, mailboxes, parked cars, driveways and kerb ramps (null without OpenStreetMap). */
     roadsideStats?: RoadsideStats | null;
+    /** Road patches, sealed cracks, manholes and drains (null on circuits). */
+    surfaceStats?: RoadSurfaceStats | null;
     /** What the road is like along its length (lanes, widths, bridges), when the site has OSM roads. */
     road: RoadInfo | null;
     featureStats: FeatureStats;
@@ -133,8 +137,8 @@ function buildSurfaceMaterials(id: string, lib: MaterialLibrary | undefined, cir
     macroDetailMaterial(book, lib, { name: 'shoulder', role: 'gravel', macro: { key: 'shoulder_macro', image: () => solidMacro(gravel.mean, 128, 0.15, 3), sizeM: MACRO_M.shoulder }, specular: 0.08 });
     macroDetailMaterial(book, lib, { name: 'verge', role: 'grass', macro: { key: 'verge_macro', image: () => solidMacro(grass.mean, 256, 0.18, 5), sizeM: MACRO_M.verge }, specular: 0.04, reflection: 0.02 });
     macroDetailMaterial(book, lib, { name: 'terrain', role: 'grass', macro: { key: 'terrain_macro', image: () => solidMacro(grass.mean.map((c) => c * 0.92) as [number, number, number], 256, 0.25, 9), sizeM: MACRO_M.terrain }, specular: 0.03, reflection: 0.02 });
-    macroDetailMaterial(book, lib, { name: 'paint_white', role: roadRole, macro: { key: 'paint_white_macro', image: () => paintMacro([232, 232, 226], 13), sizeM: MACRO_M.paint }, specular: 0.25, reflection: 0.1 });
-    macroDetailMaterial(book, lib, { name: 'paint_yellow', role: roadRole, macro: { key: 'paint_yellow_macro', image: () => paintMacro([224, 172, 38], 17), sizeM: MACRO_M.paint }, specular: 0.25, reflection: 0.1 });
+    macroDetailMaterial(book, lib, { name: 'paint_white', role: roadRole, cutout: !circuit, macro: { key: `paint_white_macro${circuit ? '' : '_worn'}`, image: () => paintMacro([232, 232, 226], 13), sizeM: MACRO_M.paint }, specular: 0.25, reflection: 0.1 });
+    macroDetailMaterial(book, lib, { name: 'paint_yellow', role: roadRole, cutout: !circuit, macro: { key: `paint_yellow_macro${circuit ? '' : '_worn'}`, image: () => paintMacro([224, 172, 38], 17), sizeM: MACRO_M.paint }, specular: 0.25, reflection: 0.1 });
     photoMaterial(book, lib, 'wall', 'concrete');
     return book;
 }
@@ -175,7 +179,7 @@ export function extConfig(ctx: ExtContext = { ground: [] }): string {
     if (ctx.water) lines.push('[INCLUDE: common/materials_track.ini]', '', '[Material_Water]', 'Materials = water', 'Type = LAKE', '');
     lines.push(
         '[RAIN_FX]',
-        'PUDDLES_MATERIALS = road',
+        'PUDDLES_MATERIALS = road, road_patch_dark, road_patch_light',
         `SOAKING_MATERIALS = verge, terrain, shoulder${ctx.ground.length ? ', ' + ctx.ground.join(', ') : ''}`,
         'SMOOTH_MATERIALS = paint_white, paint_yellow, sidewalk, bridge_walk, gutter',
         'ROUGH_MATERIALS = shoulder',
@@ -289,6 +293,9 @@ export function buildTrack(input: BuildInput): BuildResult {
         const st = streetBuild.stats;
         log(`Adding ${st.stubs} side streets, ${st.signals} signal poles, ${st.stopSigns} stop signs, ${st.crosswalks} crosswalks, ${st.speedSigns} speed signs, ${st.lamps} street lights`);
     }
+    // The asphalt itself: real repair patches from the aerial photo, crack sealant, manholes, drains.
+    const surface = circuit ? null : buildRoadSurface(cl, geometry, road ?? null, site, book, input.library, { crossS: streetBuild?.crossS, stubs: streetBuild?.stubs, seed: id.length * 13 + 5 });
+    if (surface) log(`Adding ${surface.stats.patches} road patches from the aerial photo, ${surface.stats.cracks} sealed cracks, ${surface.stats.manholes} manholes, ${surface.stats.drains} drains`);
     // Surroundings from OpenStreetMap: buildings, woods and trees, mapped barriers.
     let features: MeshPart[] = [];
     let featureStats: FeatureStats = { buildings: 0, trees: 0, barriers: 0 };
@@ -307,13 +314,13 @@ export function buildTrack(input: BuildInput): BuildResult {
     const lengthM = Math.round(cl.length);
     const stats = { lengthM, climbM: Math.round(profile.climb), descentM: Math.round(profile.descent), maxGradePct: Math.round(profile.maxGrade * 1000) / 10, widthM: input.width, minElevM: Math.round(profile.min), maxElevM: Math.round(profile.max), triangles: triangles + features.reduce((a, p) => a + p.indices.length / 3, 0) };
     if (input.output === 'geometry') {
-        return { id, files: {}, zip: new Uint8Array(0), centerline: cl, profile, geometry, elements, terrain, features, featureStats, bridges: bridgeBuild.parts, streets: [...(streetBuild?.parts ?? []), ...roadside], streetStats: streetBuild?.stats ?? null, roadsideStats, road, textures, materials, stats };
+        return { id, files: {}, zip: new Uint8Array(0), centerline: cl, profile, geometry, elements, terrain, features, featureStats, bridges: bridgeBuild.parts, streets: [...(streetBuild?.parts ?? []), ...roadside, ...(surface?.parts ?? [])], streetStats: streetBuild?.stats ?? null, roadsideStats, surfaceStats: surface?.stats ?? null, road, textures, materials, stats };
     }
     log('Writing the KN5 model');
     const kn5 = writeKn5({
         textures: [...textures, ...elements.textures],
         materials: [...materials, ...elements.materials],
-        meshes: [...geometry.parts, ...elements.parts, ...terrain, ...features, ...bridgeBuild.parts, ...(streetBuild?.parts ?? []), ...roadside],
+        meshes: [...geometry.parts, ...elements.parts, ...terrain, ...features, ...bridgeBuild.parts, ...(streetBuild?.parts ?? []), ...roadside, ...(surface?.parts ?? [])],
         dummies: geometry.dummies,
     });
 
@@ -397,6 +404,6 @@ export function buildTrack(input: BuildInput): BuildResult {
     log('Packing the zip');
     const zip = zipSync(files, { level: 6 });
     return {
-        id, files, zip, centerline: cl, profile, geometry, elements, terrain, features, featureStats, bridges: bridgeBuild.parts, streets: [...(streetBuild?.parts ?? []), ...roadside], streetStats: streetBuild?.stats ?? null, roadsideStats, road, textures, materials, stats,
+        id, files, zip, centerline: cl, profile, geometry, elements, terrain, features, featureStats, bridges: bridgeBuild.parts, streets: [...(streetBuild?.parts ?? []), ...roadside, ...(surface?.parts ?? [])], streetStats: streetBuild?.stats ?? null, roadsideStats, surfaceStats: surface?.stats ?? null, road, textures, materials, stats,
     };
 }

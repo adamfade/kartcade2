@@ -342,3 +342,23 @@ test('OSM v3 parse: businesses, power lines, parking and parks', () => {
     assert.equal(f.areas!.length, 1);
     assert.equal(f.woods.length, 1, 'a wooded park stays a wood');
 });
+
+test('road surface: sealed cracks, manholes and drains on the asphalt, worn alpha-tested paint', () => {
+    const { line, terrain, site } = valleyScene();
+    const res = buildTrack({ name: 'Valley St', polyline: line, heightSampler: terrain, width: 7, site, output: 'geometry' });
+    const st = res.surfaceStats!;
+    assert.ok(st.cracks >= 5 && st.manholes >= 1 && st.drains >= 1, JSON.stringify(st));
+    const cl = res.centerline;
+    for (const p of res.streets.filter((q) => /^PAINT_(SEAL|MANHOLE|DRAIN|PATCH)/.test(q.name))) {
+        assert.ok(p.castShadows === false);
+        for (let k = 0; k < p.positions.length; k += 3) {
+            const x = p.positions[k], y = p.positions[k + 1], z = p.positions[k + 2];
+            const i = Math.max(0, Math.min(cl.points.length - 1, Math.round(x / cl.spacing)));
+            assert.ok(Math.abs(z) <= res.geometry.halfAt(i) + 0.1, `${p.name} off the asphalt at z=${z.toFixed(2)}`);
+            assert.ok(y - res.geometry.roadHeightAt(i, z) < 0.05 && y - res.geometry.roadHeightAt(i, z) > -0.05, `${p.name} height`);
+        }
+    }
+    const paint = res.materials.find((m) => m.name === 'paint_white')!;
+    assert.equal(paint.shader, 'ksPerPixelMultiMap_AT_NMDetail');
+    assert.equal(paint.alphaTested, true);
+});
