@@ -24,7 +24,7 @@ type P2 = { x: number; y: number };
 type Ground = (x: number, z: number) => number | null;
 
 export interface StreetStats { stubs: number; signals: number; stopSigns: number; crosswalks: number; arrows: number; speedSigns: number; lamps: number; busStops: number }
-export interface StreetBuild { parts: MeshPart[]; stats: StreetStats; /** Side-street footprints (for keeping trees and buildings off them). */ stubs: { pts: P2[]; half: number }[] }
+export interface StreetBuild { parts: MeshPart[]; stats: StreetStats; /** Side-street footprints (for keeping trees and buildings off them). */ stubs: { pts: P2[]; half: number }[]; /** Crosswalks across the route (distance along it). */ crossS: number[] }
 
 interface Branch {
     way: OsmWay;
@@ -495,5 +495,5 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
     const parts = [...meshes.values()].flatMap((m) => m.parts).filter((p) => p.indices.length);
     for (const p of parts) if (p.name.startsWith('PAINT_')) p.castShadows = false;
     void paintY;
-    return { parts, stats, stubs: stubFootprints };
+    return { parts, stats, stubs: stubFootprints, crossS: routeCrossS };
 }

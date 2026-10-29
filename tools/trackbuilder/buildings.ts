@@ -178,6 +178,9 @@ export interface DetailStats { windows: number; doors: number; porches: number; 
 
 export class BuildingKit {
     readonly stats: DetailStats = { windows: 0, doors: 0, porches: 0, garages: 0, storefronts: 0, chimneys: 0, photos: 0 };
+    /** Garage doors (for driveways) and house fronts (for mailboxes), in plan. */
+    readonly driveways: { door: P2; n: P2; width: number }[] = [];
+    readonly fronts: { at: P2; n: P2 }[] = [];
     private mats = new Map<string, string>();
     private book: MaterialBook;
     private lib: MaterialLibrary | undefined;
@@ -233,6 +236,7 @@ export class BuildingKit {
         }
 
         const F = d.front >= 0 && !d.photos?.has(d.front) ? d.walls[d.front] : null;
+        if (F && isHouse) this.fronts.push({ at: { x: (F.a.x + F.c.x) / 2 + F.n.x * 0.1, y: (F.a.y + F.c.y) / 2 + F.n.y * 0.1 }, n: F.n });
         if (F && (d.kind === 'shop' || d.shops.length) && F.len >= 4 && wallTopAbove >= 4) {
             this.storefront(F, d, r);
             block(d.front, -1, F.len + 1, 4.2);
@@ -364,6 +368,8 @@ export class BuildingKit {
 
     private garageDoor(w: Wall, u0: number, u1: number, g0: number) {
         const m = this.meshFor('BLDD', w.a, this.mat('garage'));
+        const mid = this.pt(w, (u0 + u1) / 2, 0, 0.1);
+        this.driveways.push({ door: { x: mid[0], y: mid[2] }, n: w.n, width: u1 - u0 });
         const reps = Math.max(1, Math.round((u1 - u0) / 2.6));
         this.quad(m, w, u0, u1, g0 - 0.05, g0 + 2.15, 0.03, [[0, 0], [reps, 0], [reps, 1], [0, 1]]);
         const trim = this.meshFor('BLDD', w.a, this.mat('trim'));

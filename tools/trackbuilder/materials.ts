@@ -385,3 +385,49 @@ export function paintMacro(rgb: [number, number, number], seed: number): Rgba {
     }
     return { width: size, height: size, data };
 }
+
+/** A four-layer ground material: a macro colour, a mask choosing between four photo-scanned details. */
+export interface MultilayerSpec {
+    name: string;
+    /** Colour, scaled x2 like the NMDetail macros (the details average 0.5). */
+    macro: { key: string; image: () => Rgba };
+    /** RGBA weights per texel for the R, G, B and A details (summing to 255). */
+    mask: { key: string; image: () => Rgba };
+    /** Real-world size the material's 0..1 UVs span (m), for detail tiling. */
+    sizeM: number;
+    layers: [SurfaceRole, SurfaceRole, SurfaceRole, SurfaceRole];
+    specular?: number;
+}
+
+/**
+ * ksMultilayer: colour = txDiffuse x sum(txDetail_i(uv x mult_i) x txMask_i) x magicMult. Kunos uses it for
+ * grass / gravel / dirt blends; here the mask comes from classifying the aerial photo.
+ */
+export function multilayerMaterial(book: MaterialBook, lib: MaterialLibrary | undefined, spec: MultilayerSpec): string {
+    if (book.has(spec.name)) return spec.name;
+    const txDiffuse = book.image(`${spec.macro.key}.dds`, spec.macro.image, { format: 'bc1' });
+    const txMask = book.image(`${spec.mask.key}.dds`, spec.mask.image, { format: 'bc3', mips: 'linear' });
+    const det = spec.layers.map((role) => {
+        const e = entryFor(lib, role);
+        const lp = e.source.provider === 'polyhaven' ? `${e.source.asset}` : `proc_${e.role}`;
+        return { tex: book.texture(`${lp}_detail.dds`, e.detail), mult: spec.sizeM / e.tileM };
+    });
+    return book.add({
+        name: spec.name, shader: 'ksMultilayer',
+        properties: [
+            { name: 'ksAmbient', a: 0.4 }, { name: 'ksDiffuse', a: 0.6 },
+            { name: 'ksSpecular', a: spec.specular ?? 0.04 }, { name: 'ksSpecularEXP', a: 20 },
+            { name: 'ksEmissive', c: [0, 0, 0] }, { name: 'ksAlphaRef', a: 0 },
+            { name: 'multR', a: det[0].mult }, { name: 'multG', a: det[1].mult }, { name: 'multB', a: det[2].mult }, { name: 'multA', a: det[3].mult },
+            { name: 'magicMult', a: 1 },
+        ],
+        textures: [
+            { sampler: 'txDiffuse', slot: 0, texture: txDiffuse },
+            { sampler: 'txMask', slot: 1, texture: txMask },
+            { sampler: 'txDetailR', slot: 2, texture: det[0].tex },
+            { sampler: 'txDetailG', slot: 3, texture: det[1].tex },
+            { sampler: 'txDetailB', slot: 4, texture: det[2].tex },
+            { sampler: 'txDetailA', slot: 5, texture: det[3].tex },
+        ],
+    });
+}

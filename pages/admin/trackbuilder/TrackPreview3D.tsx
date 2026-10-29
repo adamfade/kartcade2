@@ -114,6 +114,44 @@ function macroDetailMaterial(macro: THREE.Texture | undefined, detail: THREE.Tex
     });
 }
 
+/** ksMultilayer as Assetto Corsa draws it: colour x sum(detail_i(uv x mult_i) x mask_i). */
+function multilayerMaterial(diffuse: THREE.Texture | undefined, mask: THREE.Texture | undefined, details: (THREE.Texture | undefined)[], mult: number[], lights: Lights): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+        fog: true,
+        side: THREE.DoubleSide,
+        uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+            diffuse: { value: diffuse ?? null }, mask: { value: mask ?? null },
+            dR: { value: details[0] ?? null }, dG: { value: details[1] ?? null }, dB: { value: details[2] ?? null }, dA: { value: details[3] ?? null },
+            mult: { value: new THREE.Vector4(...mult) },
+            sunDir: { value: lights.sunDir }, sunCol: { value: lights.sunCol }, skyCol: { value: lights.skyCol }, groundCol: { value: lights.groundCol },
+        }]),
+        vertexShader: `
+            varying vec2 vUv; varying vec3 vN;
+            #include <fog_pars_vertex>
+            void main() {
+                vUv = uv; vN = normalize(normal);
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                #include <fog_vertex>
+            }`,
+        fragmentShader: `
+            uniform sampler2D diffuse; uniform sampler2D mask; uniform sampler2D dR; uniform sampler2D dG; uniform sampler2D dB; uniform sampler2D dA;
+            uniform vec4 mult;
+            uniform vec3 sunDir; uniform vec3 sunCol; uniform vec3 skyCol; uniform vec3 groundCol;
+            varying vec2 vUv; varying vec3 vN;
+            #include <fog_pars_fragment>
+            void main() {
+                vec4 m = texture2D(mask, vUv);
+                vec3 d = texture2D(dR, vUv * mult.x).rgb * m.r + texture2D(dG, vUv * mult.y).rgb * m.g + texture2D(dB, vUv * mult.z).rgb * m.b + texture2D(dA, vUv * mult.w).rgb * m.a;
+                vec3 col = texture2D(diffuse, vUv).rgb * d;
+                vec3 n = normalize(vN);
+                vec3 light = mix(groundCol, skyCol, n.y * 0.5 + 0.5) + sunCol * max(dot(n, sunDir), 0.0);
+                gl_FragColor = vec4(col * light, 1.0);
+                #include <fog_fragment>
+            }`,
+    });
+}
+
 interface Lights { sunDir: THREE.Vector3; sunCol: THREE.Color; skyCol: THREE.Color; groundCol: THREE.Color }
 const LIGHTS: Lights = {
     sunDir: new THREE.Vector3(-0.5, 1, -0.35).normalize(),
@@ -128,7 +166,10 @@ function groupFrom(parts: MeshPart[], materials: Kn5Material[], textures: Kn5Tex
     const matByName = new Map<string, THREE.Material>();
     for (const m of materials) {
         const slot = (s: string) => texByName.get(m.textures.find((t) => t.sampler === s)?.texture ?? '');
-        if (m.shader === 'ksPerPixelMultiMap_NMDetail') {
+        if (m.shader === 'ksMultilayer') {
+            const prop = (k: string) => m.properties.find((p) => p.name === k)?.a ?? 1;
+            matByName.set(m.name, multilayerMaterial(slot('txDiffuse'), slot('txMask'), ['txDetailR', 'txDetailG', 'txDetailB', 'txDetailA'].map(slot), ['multR', 'multG', 'multB', 'multA'].map(prop), LIGHTS));
+        } else if (m.shader === 'ksPerPixelMultiMap_NMDetail') {
             const mult = m.properties.find((p) => p.name === 'detailUVMultiplier')?.a ?? 1;
             matByName.set(m.name, macroDetailMaterial(slot('txDiffuse'), slot('txDetail'), mult, LIGHTS));
         } else {

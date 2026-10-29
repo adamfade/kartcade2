@@ -274,7 +274,8 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
             // Shoulder a touch below the asphalt; on urban streets a sidewalk rising to kerb height.
             const walk = urbanRow(i);
             const shoulderY = walk ? edge + 0.15 : edge - 0.03;
-            let y = k === 0 ? edge : shoulderY;
+            // Urban: the sidewalk is flat at kerb height right from the asphalt edge (the kerb face is its own mesh).
+            let y = k === 0 ? (walk ? edge + 0.15 : edge) : shoulderY;
             if (k >= 2 && opts.ground) {
                 const g = opts.ground(p[0], p[2]);
                 // Lidar: the real ground (it already contains the road bench, ditches and cuttings), eased in
@@ -328,6 +329,34 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         const [name, mat] = u ? ['1ROAD_WALK', 'sidewalk'] : ['1GRAVEL', 'shoulder'];
         parts.push(...gridParts(`${name}_L${sfx}`, mat, sl(Ls), (i, j) => { const h = hw(ix(row(i))); return [shU(j === 0 ? -(h + shoulder) : -h), sRow(row(i)) / MACRO_M.shoulder]; }, (i) => tangent3(row(i))));
         parts.push(...gridParts(`${name}_R${sfx}`, mat, sl(Rs), (i, j) => { const h = hw(ix(row(i))); return [shU(j === 0 ? h : h + shoulder), sRow(row(i)) / MACRO_M.shoulder]; }, (i) => tangent3(row(i))));
+    });
+    // Kerbs and gutters on urban streets: the 15 cm kerb face at the asphalt edge, and the 0.45 m concrete gutter
+    // pan in front of it.
+    shoulderRuns.forEach(([a, b, u], r) => {
+        if (!u) return;
+        for (const side of [-1, 1] as const) {
+            const tag = `${side < 0 ? 'L' : 'R'}_${r}`;
+            const kerb: MeshPart = { name: `KERB_${tag}`, material: 'sidewalk', positions: [], normals: [], uvs: [], tangents: [], indices: [] };
+            const gutter: MeshPart = { name: `PAINT_GUTTER_${tag}`, material: 'gutter', positions: [], normals: [], uvs: [], tangents: [], indices: [] };
+            for (let k = a; k <= b; k++) {
+                const i = ix(k), half = hw(i), e = surf(i, side * half), rr = right(i), sM = sRow(k);
+                const inward: V3 = [-side * rr.x, 0, -side * rr.y];
+                const bot = at(i, side * half, e - 0.02), top = at(i, side * half, e + 0.15);
+                kerb.positions.push(...bot, ...top); kerb.normals.push(...inward, ...inward); kerb.uvs.push(sM / 2, 0, sM / 2, 0.08); kerb.tangents.push(cl.tangents[i].x, 0, cl.tangents[i].y, cl.tangents[i].x, 0, cl.tangents[i].y);
+                const gi = side * (half - 0.45);
+                const g0 = at(i, gi, surf(i, gi) + 0.008), g1 = at(i, side * half, e + 0.008);
+                gutter.positions.push(...g0, ...g1); gutter.normals.push(0, 1, 0, 0, 1, 0); gutter.uvs.push(0.5, sM / MACRO_M.shoulder, 0.5 + 0.45 / MACRO_M.shoulder, sM / MACRO_M.shoulder); gutter.tangents.push(rr.x, 0, rr.y, rr.x, 0, rr.y);
+                if (k > a) {
+                    const v = (k - a) * 2;
+                    for (const [m, want] of [[kerb, inward], [gutter, [0, 1, 0] as V3]] as const) {
+                        const P = (q: number): V3 => [m.positions[q * 3], m.positions[q * 3 + 1], m.positions[q * 3 + 2]];
+                        const tri = (x: number, y: number, z: number) => { const c = cross(sub(P(y), P(x)), sub(P(z), P(x))); if (c[0] * want[0] + c[1] * want[1] + c[2] * want[2] >= 0) m.indices.push(x, y, z); else m.indices.push(x, z, y); };
+                        tri(v - 2, v, v - 1); tri(v - 1, v, v + 1);
+                    }
+                }
+            }
+            parts.push(kerb, gutter);
+        }
     });
     runs.forEach(([a, b], r) => {
         const sfx = runs.length > 1 ? `_r${r}` : '';

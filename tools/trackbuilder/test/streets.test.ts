@@ -16,6 +16,7 @@ import type { ReadNode } from './kn5Reader.ts';
 import { datumOffset, decodeLaz, fromMerc, pngsToSurface, rasterizeSurface, surfaceToPngs, toMerc } from '../lidar.ts';
 import type { SurfaceRaster } from '../lidar.ts';
 import { toPortable, fromPortable } from '../portable.ts';
+import { classifyGround } from '../ground.ts';
 import type { LatLon } from '../geo.ts';
 
 function walk(n: ReadNode, f: (n: ReadNode) => void) { f(n); n.children.forEach((c) => walk(c, f)); }
@@ -272,4 +273,72 @@ test('worker round trip: a portable build answers like the original', () => {
     const p = { x: 123, y: 45 }, a = res.centerline.projection.toLatLon(p), b = back.centerline.projection.toLatLon(p);
     assert.ok(Math.abs(a.lat - b.lat) < 1e-12 && Math.abs(a.lon - b.lon) < 1e-12);
     assert.equal(back.streets.length, res.streets.length);
+});
+
+test('ground classes: photo, near-infrared and lidar decide grass, pavement, dirt and forest floor', () => {
+    assert.equal(classifyGround([70, 110, 60], 180, 0.1), 0, 'green with high NIR, low: lawn');
+    assert.equal(classifyGround([40, 60, 40], 140, 14), 3, 'vegetation under tall lidar returns: forest floor');
+    assert.equal(classifyGround([120, 120, 124], 110, 0), 1, 'grey: pavement');
+    assert.equal(classifyGround([170, 140, 100], 150, 0), 2, 'tan, no vegetation signal: dirt');
+    assert.equal(classifyGround([70, 110, 60], null, null), 0, 'no NIR: greenness decides');
+});
+
+test('ground, water and roadside: multilayer aerial ground, river, kerbs, poles and wires, hydrants, cars, ramps', () => {
+    const { line, terrain, site, ll } = valleyScene();
+    const osm = site.osm!;
+    // A power line along the north side of Main Street with three poles, a parking lot, a pond in the valley.
+    const poleAt = [ll(520, 12), ll(560, 12), ll(600 - 6, 12)];
+    poleAt.forEach((at, k) => osm.points!.push({ id: 9000 + k, at, tags: { power: 'pole' } }));
+    osm.power = [{ id: 9100, line: poleAt, tags: { power: 'minor_line' } }];
+    const sq = (e0: number, n0: number, e1: number, n1: number) => [ll(e0, n0), ll(e1, n0), ll(e1, n1), ll(e0, n1), ll(e0, n0)];
+    osm.areas = [{ id: 9200, rings: [sq(640, -70, 720, -25)], tags: { amenity: 'parking' } }];
+    osm.water = [{ id: 9300, rings: [sq(340, -200, 410, -60)], tags: { natural: 'water' } }];
+    const res = buildTrack({ name: 'Valley St', polyline: line, heightSampler: terrain, width: 7, site, bridgeStyles: { '2': 'arch' } });
+    // Aerial ground is ksMultilayer with a mask and four details.
+    const aerial = res.materials.filter((m) => m.name.startsWith('aerial_'));
+    assert.ok(aerial.length && aerial.every((m) => m.shader === 'ksMultilayer' && m.textures.length === 6));
+    const mask = res.textures.find((t) => t.name.startsWith('aerialmask_'));
+    assert.ok(mask, 'mask texture');
+    // Water mesh in the valley.
+    assert.ok(res.terrain.some((p) => p.name.startsWith('WATER_') && p.material === 'water'));
+    const ext = new TextDecoder().decode(res.files['valley_st/extension/ext_config.ini']);
+    assert.match(ext, /USE_MULTILAYER_MASK = 1/);
+    assert.match(ext, /\[Material_Water\][\s\S]*Materials = water/);
+    // Kerbs and gutters on the urban stretch only.
+    const kerbs = res.geometry.parts.filter((p) => p.name.startsWith('KERB_'));
+    assert.ok(kerbs.length >= 2 && res.geometry.parts.some((p) => p.name.startsWith('PAINT_GUTTER_')));
+    for (const p of kerbs) for (let k = 0; k < p.positions.length; k += 3) assert.ok(p.positions[k] > 440, `kerb at x=${p.positions[k].toFixed(1)}`);
+    // Roadside: the mapped poles with wires between them, hydrants in town, cars in the lot, kerb ramp panels.
+    const rs = res.roadsideStats!;
+    assert.equal(rs.poles, 3);
+    assert.equal(rs.wires, 2);
+    assert.ok(rs.hydrants >= 1 && rs.lotCars >= 4 && rs.ramps >= 2, JSON.stringify(rs));
+    const cl = res.centerline;
+    for (const p of res.streets.filter((q) => /^RS_(POLES|HYDRANTS|LOTCARS)/.test(q.name))) {
+        for (let k = 0; k < p.positions.length; k += 3) {
+            const x = p.positions[k], z = p.positions[k + 2];
+            const i = Math.max(0, Math.min(cl.points.length - 1, Math.round(x / cl.spacing)));
+            assert.ok(Math.abs(z) > res.geometry.halfAt(i) - 0.05, `${p.name} on the road at x=${x.toFixed(1)} z=${z.toFixed(2)}`);
+        }
+    }
+    const k = readKn5(res.files['valley_st/valley_st.kn5']);
+    assert.equal(k.consumed, k.total);
+});
+
+test('OSM v3 parse: businesses, power lines, parking and parks', () => {
+    const json = { elements: [
+        { type: 'node', id: 1, lat: 45.1, lon: -122.1, tags: { shop: 'bakery', name: 'Sweet' } },
+        { type: 'node', id: 2, lat: 45.1, lon: -122.1, tags: { amenity: 'cafe' } },
+        { type: 'node', id: 3, lat: 45.1, lon: -122.1, tags: { power: 'pole' } },
+        { type: 'node', id: 4, lat: 45.1, lon: -122.1, tags: { emergency: 'fire_hydrant' } },
+        { type: 'way', id: 5, tags: { power: 'line' }, geometry: [{ lat: 45.1, lon: -122.1 }, { lat: 45.2, lon: -122.1 }] },
+        { type: 'way', id: 6, tags: { amenity: 'parking' }, geometry: [{ lat: 45.1, lon: -122.1 }, { lat: 45.2, lon: -122.1 }, { lat: 45.2, lon: -122.2 }, { lat: 45.1, lon: -122.1 }] },
+        { type: 'way', id: 7, tags: { leisure: 'park', natural: 'wood' }, geometry: [{ lat: 45.1, lon: -122.1 }, { lat: 45.2, lon: -122.1 }, { lat: 45.2, lon: -122.2 }, { lat: 45.1, lon: -122.1 }] },
+    ] };
+    const f = parseOverpass(json as never, { south: 45, west: -123, north: 46, east: -122 }, 'x');
+    assert.equal(f.pois!.length, 2);
+    assert.equal(f.points!.length, 2);
+    assert.equal(f.power!.length, 1);
+    assert.equal(f.areas!.length, 1);
+    assert.equal(f.woods.length, 1, 'a wooded park stays a wood');
 });
