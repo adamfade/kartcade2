@@ -20,7 +20,9 @@ import type { Kn5Material, Kn5Texture } from '../../../tools/trackbuilder/kn5.ts
 import { decodeDds } from '../../../tools/trackbuilder/dds.ts';
 import { laneGeometry } from '../../../tools/trackbuilder/roadinfo.ts';
 
-export interface TrackPick { s: number; lateral: number; index: number }
+export interface TrackPick { s: number; lateral: number; index: number; /** The clicked point in AC space (x east, y up, z north). */ point: { x: number; y: number; z: number } }
+/** A review pin drawn in the scene (AC space). */
+export interface ReviewPin { id: string; point: { x: number; y: number; z: number }; done?: boolean; active?: boolean }
 
 interface Props {
     build: BuildResult;
@@ -30,8 +32,10 @@ interface Props {
     /** Distance (m) of a pending first click, drawn as a marker. */
     marker: number | null;
     onPick: (p: TrackPick) => void;
-    /** Ask for ground view at this distance (nonce makes repeat requests fire). */
-    goTo: { s: number; nonce: number } | null;
+    /** Ask for ground view at this distance (nonce makes repeat requests fire), optionally looking at a point. */
+    goTo: { s: number; nonce: number; look?: { x: number; y: number; z: number } } | null;
+    /** Review notes and facade-photo spots, drawn as pins. */
+    pins?: ReviewPin[];
     className?: string;
 }
 
@@ -234,23 +238,26 @@ function applyLods(scene: THREE.Scene, camera: THREE.Camera) {
  * Open Google Street View at distance s along the track, facing the direction of travel. Linking out with the
  * Maps URLs API is allowed; Street View imagery itself must never be copied into a track.
  */
-export function openStreetView(build: BuildResult, s: number) {
+export function openStreetView(build: BuildResult, s: number, view?: { lat?: number; headingDeg?: number; pitchDeg?: number; look?: { x: number; z: number } }) {
     const c = build.centerline;
     const x = c.closed ? ((s % c.length) + c.length) % c.length : Math.max(0, Math.min(c.length, s));
     let i = 0;
     while (i < c.points.length - 1 && c.s[i + 1] <= x) i++;
-    const ll = c.projection.toLatLon(c.points[i]);
-    const t = c.tangents[i];
-    const heading = Math.round(((Math.atan2(t.x, t.y) * 180) / Math.PI + 360) % 360);
-    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat.toFixed(6)},${ll.lon.toFixed(6)}&heading=${heading}&pitch=0&fov=80`;
+    const t = c.tangents[i], lat = view?.lat ?? 0;
+    const at = { x: c.points[i].x + t.y * lat, y: c.points[i].y - t.x * lat };
+    const ll = c.projection.toLatLon(at);
+    // Facing: the given compass heading, or towards a point (x east, z north), or along the road.
+    const deg = view?.headingDeg ?? (view?.look ? (Math.atan2(view.look.x - at.x, view.look.z - at.y) * 180) / Math.PI : (Math.atan2(t.x, t.y) * 180) / Math.PI);
+    const heading = Math.round(((deg % 360) + 360) % 360), pitch = Math.round(Math.max(-60, Math.min(60, view?.pitchDeg ?? 0)));
+    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat.toFixed(6)},${ll.lon.toFixed(6)}&heading=${heading}&pitch=${pitch}&fov=80`;
     window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPick, goTo, className }) => {
+const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPick, goTo, pins, className }) => {
     const host = useRef<HTMLDivElement>(null);
     const three = useRef<{
         renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls;
-        base?: ReturnType<typeof groupFrom>; scenery?: ReturnType<typeof groupFrom>; marker: THREE.Group; route?: Line2;
+        base?: ReturnType<typeof groupFrom>; scenery?: ReturnType<typeof groupFrom>; marker: THREE.Group; route?: Line2; pins: THREE.Group;
     } | null>(null);
     const [mode, setMode] = useState<Mode>('orbit');
     const [driving, setDriving] = useState(false);
@@ -299,7 +306,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
             for (let i = 0; i < c.points.length; i++) { const d = (c.points[i].x - ax) ** 2 + (c.points[i].y - az) ** 2; if (d < bd) { bd = d; best = i; } }
             const t = c.tangents[best];
             const lateral = (ax - c.points[best].x) * t.y + (az - c.points[best].y) * -t.x;
-            return { s: c.s[best], lateral, index: best };
+            return { s: c.s[best], lateral, index: best, point: { x: v.x, y: v.y, z: -v.z } };
         },
     });
 
@@ -368,7 +375,9 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
         markerGroup.add(pole, ball);
         markerGroup.visible = false;
         scene.add(markerGroup);
-        three.current = { renderer, scene, camera, controls, marker: markerGroup };
+        const pinGroup = new THREE.Group();
+        scene.add(pinGroup);
+        three.current = { renderer, scene, camera, controls, marker: markerGroup, pins: pinGroup };
 
         const resize = () => {
             const w = el.clientWidth, h = el.clientHeight;
@@ -511,7 +520,32 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
         t.marker.visible = true;
     }, [marker, build]);
 
-    useEffect(() => { if (goTo) enterGround(goTo.s); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [goTo?.nonce]);
+    useEffect(() => {
+        if (!goTo) return;
+        enterGround(goTo.s);
+        if (goTo.look) {
+            const e = helpers.current.eye(goTo.s, view.current.lat), L = new THREE.Vector3(goTo.look.x, goTo.look.y, -goTo.look.z);
+            view.current.yaw = Math.atan2(-(L.x - e.x), -(L.z - e.z));
+            view.current.pitch = Math.max(-0.6, Math.min(0.6, Math.atan2(L.y - e.y, Math.hypot(L.x - e.x, L.z - e.z))));
+        }
+        /* eslint-disable-next-line react-hooks/exhaustive-deps */
+    }, [goTo?.nonce]);
+
+    // ---- review pins
+    useEffect(() => {
+        const t = three.current; if (!t) return;
+        t.pins.children.slice().forEach((c) => { t.pins.remove(c); (c as THREE.Mesh).geometry?.dispose(); });
+        for (const p of pins ?? []) {
+            const colour = p.done ? 0x2d9e49 : p.active ? 0xf5b700 : 0xd42428;
+            const m = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, transparent: true, opacity: 0.9 });
+            const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.4, 6), m);
+            stick.position.set(p.point.x, p.point.y + 1.2, -p.point.z);
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8), m);
+            head.position.set(p.point.x, p.point.y + 2.5, -p.point.z);
+            stick.renderOrder = head.renderOrder = 20;
+            t.pins.add(stick, head);
+        }
+    }, [pins]);
 
     const btn = 'px-3 py-1.5 rounded-lg text-xs font-medium bg-black/60 hover:bg-black/80 text-white flex items-center gap-1 backdrop-blur';
     return (
@@ -524,7 +558,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
                     <button type="button" className={btn} onClick={enterOrbit}><Globe2 className="w-3.5 h-3.5" /> Overview</button>
                     <button type="button" className={btn} onClick={() => step(-25)}><ChevronLeft className="w-3.5 h-3.5" /> 25 m</button>
                     <button type="button" className={btn} onClick={() => step(25)}>25 m <ChevronRight className="w-3.5 h-3.5" /></button>
-                    <button type="button" className={btn} title="Open Google Street View at this spot, facing the same way (reference only)" onClick={() => openStreetView(build, view.current.s)}><MapPinned className="w-3.5 h-3.5" /> Street View</button>
+                    <button type="button" className={btn} title="Open Google Street View at this spot, facing the same way (reference only)" onClick={() => openStreetView(build, view.current.s, { lat: Number.isNaN(view.current.lat) ? helpers.current.laneLat(helpers.current.index(view.current.s)) : view.current.lat, headingDeg: (-view.current.yaw * 180) / Math.PI, pitchDeg: (view.current.pitch * 180) / Math.PI })}><MapPinned className="w-3.5 h-3.5" /> Street View</button>
                     <button type="button" className={btn} onClick={() => { const d = !view.current.driving; view.current.driving = d; setDriving(d); }}>
                         {driving ? <><Pause className="w-3.5 h-3.5" /> Stop</> : <><Car className="w-3.5 h-3.5" /> Drive</>}
                     </button>

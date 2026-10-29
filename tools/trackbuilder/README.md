@@ -113,25 +113,33 @@ track's real camber and dips won't show. For Mac Track, a 1 m DOGAMI LiDAR DEM w
 
 ## Limits
 
-- **One road only.** No junctions, side roads, buildings, trees, barriers or signs; the land beyond the verge is
-  flat grass at road height.
-- **One AI line** down the centre, with speeds from curvature. Not in the default build until a recorded
-  line confirms the format (v1 crashed AC in `Track::initAISpline`; the writer was missing the trailing
-  has-grid flag, now fixed). No pit lane; one pit box at the start of a road.
-- **Width:** single width for the whole track (OSM `width`, else `lanes` × 3.25 m, else 6.5 m). The live
-  Overpass call is optional and was blocked from the build sandbox, so it is untested against the live API.
-- **Elevation:** ~10 m DEM resolution at zoom 14. Cuttings and bridges come out as the ground under them.
-- **Route length:** the elevation fetch is capped at 64 tiles, roughly 15–20 km of road.
-- **Public services:** Nominatim and the OSRM demo are rate-limited community services. Fine for a few builds; not
-  for automation.
-- **Night lighting:** none. No CSP / Shaders Patch extension config.
+- **Real ground needs the site data.** With "Real ground" on (the default) the build uses 1 m lidar, the 3DEP point
+  cloud, NAIP imagery (RGB + near-infrared) and OpenStreetMap, fetched once per route and stored. Without it (or
+  outside the US) the land is the coarse ~10 m elevation with generic surfaces, and no buildings or street detail.
+- **AI line:** one line along the lane, speeds from curvature. Not in the default build until a recorded line
+  confirms the format. No pit lane; one pit box at the start of a road.
+- **OpenStreetMap decides the street layout:** lanes, parking, signals, signs, crossings, businesses and power lines
+  appear only where they are mapped (lidar adds unmapped buildings, trees, utility poles and street lights). Pin a
+  review note where reality differs and fix it with the scenery tools.
+- **Detail is generated, not photographed:** facades, windows and storefronts are procedural (with the business
+  names from OSM); only facades the driver photographed themselves look like the real building. Street View is a
+  reference link only and is never copied into a track.
+- **Night lighting and the ground-mask grass need Custom Shaders Patch.** Without CSP the track is daytime only and
+  the grass is the textured ground.
+- **Size:** a 1.7 km town stretch is ~670k triangles, ~1,900 meshes and a 26 MB zip; longer routes grow roughly with
+  length. The elevation fetch is capped at 64 tiles (~15-20 km of road).
+- **Public services:** Nominatim, the OSRM demo and Overpass are rate-limited community services. Fine for a few
+  builds; not for automation.
 
 ## Tests
 
 `npm run test:trackbuilder` runs the Node tests on a synthetic winding hill road and a synthetic 1 km kart
 circuit: centreline (open and closed), widths, PNG and Terrarium decode, grade clamp, full builds with a KN5
 read-back, required node names, the AI file layout, verge overlap, trace parsing (GPX, KML, GeoJSON), zip
-contents and ui_track.json.
+contents and ui_track.json. `test/streets.test.ts`, `test/buildings.test.ts` and the tree tests cover the real-road
+layers on a synthetic valley scene: lanes, bridges, junctions and signals, lidar decoding, ground classes and the
+multilayer mask, water, kerbs, poles and wires, parked cars, road patches and cracks, night lights, the horizon
+ring, tree models and billboards, and building detail.
 
 The Pete's Mountain Rd build (West Linn, 5.77 km, 252 m of climb) was also checked with a separate validator
 written independently from these formats. It passed with no failures or warnings, and the browser build matched
@@ -161,5 +169,9 @@ Nothing here has been loaded in Assetto Corsa yet. Allow about 20 minutes.
 7. **AI.** Start a Quick Race with 1–2 AI. Check they drive the road and don't stall or drive into the grass. A
    wobbly AI is expected with a simple line; stopping or reversing is not.
 8. **Minimap.** Check the minimap shows the road shape and your car dot follows it (not mirrored).
-9. **Report.** Send what passed/failed with the screenshots. The likely fixes are small (start direction, map
+9. **Town build (CSP on).** Build the Lake Oswego → Oregon City route with Real ground and drive it once by day and
+   once at night (CM → time 21:00). Check: FPS with the town in view (note the number and your GPU); trees switch
+   from models to billboards without a visible pop at ~200 m; street lamps, porch lights and shop windows light
+   up at night; grass grows on lawns but not on parking lots; hills on the horizon. *Screenshot anything odd.*
+10. **Report.** Send what passed/failed with the screenshots. The likely fixes are small (start direction, map
    orientation, AI layout), and a rebuild takes seconds.

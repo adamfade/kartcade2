@@ -28,6 +28,8 @@ import { LIBRARY_ROLES_FOR_BUILD, loadLibrary } from './materialLibrary';
 import type { MaterialLibrary } from '../../../tools/trackbuilder/materials.ts';
 import type { TrackPick } from './TrackPreview3D';
 import SceneryPanel from './SceneryPanel';
+import ReviewPanel, { dataUrlToRgba, photoToDataUrl } from './ReviewPanel';
+import type { FacadePhoto, ReviewNote, ReviewTool } from './ReviewPanel';
 import type { Tool, ToolOptions } from './SceneryPanel';
 
 type Mode = 'start' | 'via' | 'end';
@@ -127,13 +129,23 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             .then((lib) => { library.current = lib; const n = Object.keys(lib).length; setLibStatus(n ? `Photo-scanned materials (${n} loaded)` : 'Procedural materials (import the photo library from the track list)'); })
             .catch((e) => { library.current = {}; setLibStatus(`Procedural materials (library unavailable: ${(e as Error).message})`); });
     }, []);
-    const [goTo, setGoTo] = useState<{ s: number; nonce: number } | null>(null);
+    const [goTo, setGoTo] = useState<{ s: number; nonce: number; look?: { x: number; y: number; z: number } } | null>(null);
+    // Review: notes pinned in the preview, and the driver's own facade photos.
+    const [notes, setNotesRaw] = useState<ReviewNote[]>(initial.reviewNotes ?? []);
+    const [photos, setPhotosRaw] = useState<FacadePhoto[]>(initial.facadePhotos ?? []);
+    const [reviewTool, setReviewToolRaw] = useState<ReviewTool | null>(null);
+    const [pendingPhoto, setPendingPhoto] = useState<Omit<FacadePhoto, 'dataUrl' | 'id'> | null>(null);
+    const [activeNote, setActiveNote] = useState<string | null>(null);
+    const photoRgba = useRef(new Map<string, { width: number; height: number; data: Uint8Array }>());
+    const setNotes = (n: ReviewNote[]) => { setNotesRaw(n); touch(); };
+    const setPhotos = (p: FacadePhoto[]) => { setPhotosRaw(p); touch(); };
+    const setReviewTool = (t: ReviewTool | null) => { setReviewToolRaw(t); setPendingPhoto(null); if (t) { setToolRaw(null); setPendingFrom(null); } };
 
     const pins = useMemo(() => (start && end ? [start, ...vias, end] : null), [start, vias, end]);
     const net: NetOptions = useMemo(() => ({ fetch: politeFetch, log: (m) => setLog((l) => [...l, m]) }), []);
     const touch = () => setDirty(true);
     const setElements = (e: TrackElement[]) => { setElementsRaw(e); touch(); };
-    const setTool = (t: Tool | null) => { setToolRaw(t); setPendingFrom(null); };
+    const setTool = (t: Tool | null) => { setToolRaw(t); setPendingFrom(null); if (t) { setReviewToolRaw(null); setPendingPhoto(null); } };
 
     // Route changes invalidate the built centreline (and with it the preview).
     const routeChanged = useCallback(() => { setLine(null); setBase(null); setToolRaw(null); setPendingFrom(null); touch(); }, []);
@@ -284,14 +296,18 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                 }
             }
         }
+        await decodePhotos();
         return { polyline, fn: sampler.current.fn };
     };
+    /** Facade photos decoded once into images the builder can use. */
+    const decodePhotos = async () => { for (const ph of photos) if (!photoRgba.current.has(ph.id)) photoRgba.current.set(ph.id, await dataUrlToRgba(ph.dataUrl)); };
     /** Build inputs as plain data (the worker can't take functions). */
     const plainInput = (polyline: LatLon[], withElements: boolean) => ({
         name: name.trim() || 'Track', polyline, width: widthM(), walls,
         flipStart: flip, circuit: kind === 'circuit', reverse, gridSlots: parseInt(gridSlots, 10) || 12,
         city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements: withElements ? elements : elements.filter((e) => e.type === 'lines'),
         library: library.current ?? undefined, site: realGround ? siteRef.current?.site : undefined, bridgeStyles,
+        facadePhotos: photos.flatMap((ph) => { const image = photoRgba.current.get(ph.id); return image ? [{ at: ph.at, image }] : []; }),
     });
     /** The preview (geometry and materials only) builds in the worker too, so long roads never freeze the page. */
     const previewBuild = async (polyline: LatLon[]) => {
@@ -311,14 +327,14 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     // Rebuild the base when options that change its shape change (keeps the preview honest).
     // Centre-line stretches change the road markings, which are part of the base geometry.
     const linesKey = JSON.stringify(elements.filter((e) => e.type === 'lines'));
-    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}|${JSON.stringify(bridgeStyles)}`;
+    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}|${JSON.stringify(bridgeStyles)}|${photos.map((p) => p.id).join(',')}`;
     const lastOpts = useRef(optsKey);
     useEffect(() => {
         if (lastOpts.current === optsKey) return;
         lastOpts.current = optsKey;
         if (base && line && sampler.current) {
             if (realGround && !siteRef.current) buildPreview(); // fetch the site first
-            else { setBusy('preview'); previewBuild(line).then(setBase, (e) => setError((e as Error).message)).finally(() => setBusy('')); }
+            else { setBusy('preview'); decodePhotos().then(() => previewBuild(line)).then(setBase, (e) => setError((e as Error).message)).finally(() => setBusy('')); }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [optsKey]);
@@ -351,6 +367,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                 id: projectId, name: name.trim() || 'Untitled track', kind,
                 pins: pins ?? [], loop, line, width: parseFloat(width) || null, walls, flipStart: flip, reverse,
                 gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined, siteId, realGround, bridgeStyles,
+                reviewNotes: notes, facadePhotos: photos,
                 stats: base ? { lengthM: base.stats.lengthM, climbM: base.stats.climbM } : (initial.stats ?? null),
             }, currentUser?.email);
             if (!projectId) { setProjectId(id); navigate(`/admin/track-builder?id=${id}`, { replace: true }); }
@@ -360,6 +377,17 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
 
     // ---- scenery placement from 3D picks
     const onPick = (p: TrackPick) => {
+        if (reviewTool && base) {
+            if (reviewTool === 'note') {
+                const id = elementId();
+                setNotes([...notes, { id, s: p.s, point: p.point, text: '' }]);
+                setActiveNote(id);
+            } else {
+                const at = base.centerline.projection.toLatLon({ x: p.point.x, y: p.point.z });
+                setPendingPhoto({ s: p.s, point: p.point, at });
+            }
+            return;
+        }
         if (!tool || !base) return;
         const id = elementId();
         if (tool === 'guardrail' || tool === 'trees' || tool === 'lines') {
@@ -518,11 +546,24 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             {/* Step 2: 3D preview and scenery */}
             {base && scenery && (
                 <div className="grid lg:grid-cols-[1fr_340px] gap-6">
-                    <TrackPreview3D build={base} scenery={scenery} picking={!!tool} marker={pendingFrom} onPick={onPick} goTo={goTo} className="h-[600px] rounded-xl overflow-hidden border border-white/10 bg-black" />
+                    <TrackPreview3D build={base} scenery={scenery} picking={!!tool || (!!reviewTool && !pendingPhoto)} marker={pendingFrom} onPick={onPick} goTo={goTo}
+                        pins={[...notes.map((n) => ({ id: n.id, point: n.point, done: n.done, active: n.id === activeNote })), ...photos.map((ph) => ({ id: ph.id, point: ph.point, done: true })), ...(pendingPhoto ? [{ id: 'pending', point: pendingPhoto.point, active: true }] : [])]}
+                        className="h-[600px] rounded-xl overflow-hidden border border-white/10 bg-black" />
+                    <div className="space-y-6">
                     <SceneryPanel tool={tool} setTool={setTool} options={toolOpts} setOptions={setToolOpts} pendingFrom={pendingFrom}
                         elements={elements} setElements={setElements} lengthM={base.centerline.length} circuit={base.centerline.closed}
                         onStreetView={(s) => openStreetView(base, s)}
                         onView={(s) => setGoTo({ s: base.centerline.closed ? s - 30 : Math.max(0, s - 30), nonce: Date.now() })} onQuick={onQuick} />
+                    <ReviewPanel tool={reviewTool} setTool={setReviewTool} notes={notes} setNotes={setNotes} photos={photos} setPhotos={setPhotos}
+                        pendingPhoto={pendingPhoto} cancelPhoto={() => setPendingPhoto(null)} activeId={activeNote} setActiveId={setActiveNote}
+                        onPhotoChosen={async (f) => {
+                            if (!pendingPhoto) return;
+                            try { const dataUrl = await photoToDataUrl(f); setPhotos([...photos, { id: elementId(), ...pendingPhoto, dataUrl, label: f.name }]); setPendingPhoto(null); setReviewTool(null); }
+                            catch (e) { setError(`Couldn't read that photo (${(e as Error).message})`); }
+                        }}
+                        onView={(s, look) => setGoTo({ s: base.centerline.closed ? s - 25 : Math.max(0, s - 25), nonce: Date.now(), look })}
+                        onStreetView={(s, look) => openStreetView(base, Math.max(0, s - 15), { look: { x: look.x, z: look.z } })} />
+                    </div>
                 </div>
             )}
             <p className="mt-6 text-xs text-white/30">Road data © OpenStreetMap contributors (ODbL). Elevation: AWS Terrain Tiles. Routing: OSRM. Raceway search: Overpass API. Map data is fetched from this browser.</p>

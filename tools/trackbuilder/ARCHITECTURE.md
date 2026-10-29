@@ -63,13 +63,18 @@ coverage (`MipKind 'cutout'`), so forests don't thin out with distance.
 | 1 | Photo-scanned material library, macro + detail surfaces, DDS, markings, gravel shoulder, CSP config | done |
 | 2 | Street View reference links in the editor | done |
 | 3 | Site data: USGS 3DEP 1 m elevation and NAIP aerial imagery (RGB + near-infrared), fetched in the browser and stored per route (`site.ts`, `siteStore.ts`); verge follows the lidar ground; aerial photo as the verge/terrain macro per 512 m cell with the road painted out (`ground.ts`); invisible boundary walls | done |
-| 3b | Trees from the near-infrared canopy where there is no lidar (done); surface classes from imagery (forest floor, dirt, gravel drives) and a distant terrain ring to the horizon | partly done |
+| 3b | Trees from the near-infrared canopy where there is no lidar; ground classes from the aerial photo: each region's ground is `ksMultilayer` with a mask (R grass, G pavement, B dirt, A forest floor) classified from the photo, near-infrared, lidar heights and mapped parking/parks (`ground.ts`), GrassFX bound to the mask; rivers and lakes as a water mesh (CSP water shader); a 40 km horizon ring from coarse 3DEP + NAIP with earth curvature (`horizon.ts`) | done |
 | 4 | OpenStreetMap features (`osm.ts`, `features.ts`): buildings from footprints with levels/height tags, gable roofs on rectangles, hip otherwise, flat on big buildings; woods filled with billboard trees (denser near the road, smaller where they would overhang it, far ones thinned and LOD'd out); single trees and tree rows; guard rails, fences, walls and hedges with gaps at the road. Chunked into 256 m cells; collision (`1WALL_*`) only within 45 m of the road. Water is fetched and stored for stage 3b | done |
 | 4b | The road as mapped (`roadinfo.ts`): each centreline sample matched to its OSM way; width from lanes, parking and bike lanes (tapered over 40 m); lane lines per US practice (double yellow, two-way turn lane, white dashed lane lines, solid beside turn pockets, kerbside lines); raised concrete sidewalks on urban streets | done |
 | 4c | Bridges (`bridge.ts`): the deck levelled across the gap (bare-earth DEMs drop to the river); kerbed walkways, parapets with collision, deck slab; beam bridges on piers, arch (through arch on long spans: ribs, hangers, struts) or steel truss, chosen per bridge in the editor | done |
 | 4d | Streets (`streets.ts`): side-street stubs at every junction; mast-arm signals (far-right corner, a head per lane, street name blade; static green for the route, red for side streets); stop and yield signs with stop lines; crosswalks (continental or two lines); lane-use arrows; speed limit signs where the limit changes; street lights; bus stops | done |
 | 4e | Lidar surface (`lidar.ts`): the 3DEP point cloud (EPT on AWS) fetched along the corridor (~120 m each side) and rasterised to height-above-ground + class per cell, datum-checked against the DEM. Gives real roof heights and shapes, unmapped buildings (tall, non-vegetation blobs), and every tree as a lidar treetop with its real height and crown shape (pointed = conifer) | done |
-| 5 | Vegetation and detail: photo-based tree species, GrassFX tuning, LODs, roadside clutter (mailboxes, posts, warning signs from reference), animated signals (CSP) | planned |
+| 5 | Trees (`trees.ts`): Douglas fir, western red cedar, bigleaf maple, Oregon white oak and street trees as card-based 3D models within ~25 m of the road, handing over (KN5 `lodIn`/`lodOut` on 96 m chunks) to billboards rendered in software from the same models | done |
+| 5b | Buildings (`buildings.ts`): roof colour read from the aerial photo; framed windows with sills (a third lit at night), front doors with steps or porches, garage doors, eaves (fascia, soffit, rake boards), chimneys; storefronts for OSM shops/amenities with glass, bulkhead, a sign with the business name and awnings; the driver's own facade photos for landmarks | done |
+| 5c | Roadside (`roadside.ts`): kerbs and concrete gutters on town streets (`mesh.ts`); wooden utility poles (OSM, plus lidar spikes that string to a neighbour) with power and phone wires; cobra-head lamps (lidar 6.5-9.5 m poles, some utility poles); hydrants; rural mailboxes; parked cars in OSM parking lanes and lots; driveways to road-facing garages; tactile kerb-ramp panels at crosswalks | done |
+| 5d | Road surface (`roadsurface.ts`): real repair patches read from the aerial photo, tar crack sealant, manholes, storm drains; worn, alpha-tested paint | done |
+| 5e | Night (CSP): light series for street lamps, porch lights and shop windows; emissive adjustments for lit windows, shop glass, signs and lamp lenses on `NightLights`; CSP tiling fix on photo-detail materials; per-pixel fog on the horizon | done |
+| 5f | Review (`ReviewPanel.tsx`): notes pinned in the preview with a view-from-the-road and a Street View compare (same spot, facing the pin), a copyable checklist; facade photos; the preview honours `lodIn`/`lodOut` | done |
 
 ## Builds
 
@@ -79,10 +84,15 @@ zip) and comes back through `portable.ts`, which turns the geometry's functions 
 `buildTrack`) packs the full track.
 
 Source priority for surroundings: lidar surface, then near-infrared canopy, then OpenStreetMap woods and trees.
+
+LOD and budget: 3D tree models only near the road (default cap 1,500) and drawn to 230 m, their billboards from
+200 m; window, door and trim detail only on buildings within 150 m of the road, drawn to 900 m; far building
+chunks to 4 km; wires to 900 m, small roadside items and lot cars to 600 m; road decals to 250 m.
 Buildings always come from OSM footprints (lidar sets their heights), plus lidar-only buildings where OSM has none.
 
 ## Output layout
 
 `<id>/<id>.kn5` (one model; meshes chunked), `data/surfaces.ini`, `data/cameras.ini`, `data/map.ini`, `map.png`,
-`ui/ui_track.json` (+ outline, preview), `extension/ext_config.ini` (CSP: GrassFX, RainFX), `ai/fast_lane.ai`
+`ui/ui_track.json` (+ outline, preview), `extension/ext_config.ini` (CSP: GrassFX bound to the ground mask, RainFX,
+water, night lights and glowing materials, tiling fix, horizon fog), `ai/fast_lane.ai`
 (only with `--with-ai` until a rig test confirms it), `README.txt`.
