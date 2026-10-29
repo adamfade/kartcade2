@@ -448,11 +448,11 @@ export class BuildingKit {
 
 /** What an unnamed business's sign says: its type, as storefronts put it. */
 export function typeLabel(t: Record<string, string>): string {
-    const k = t.amenity ?? t.shop ?? t.office ?? t.craft ?? '';
+    const k = t.amenity ?? t.shop ?? t.office ?? t.craft ?? t.leisure ?? '';
     const map: Record<string, string> = {
         restaurant: 'Restaurant', cafe: 'Coffee', fast_food: 'Food', bar: 'Bar', pub: 'Pub', bank: 'Bank', pharmacy: 'Pharmacy', post_office: 'Post Office',
         library: 'Library', clinic: 'Clinic', dentist: 'Dental', doctors: 'Medical', ice_cream: 'Ice Cream', fuel: 'Gas', car_wash: 'Car Wash', veterinary: 'Animal Clinic',
-        beauty: 'Salon', hairdresser: 'Hair', florist: 'Flowers', bakery: 'Bakery', convenience: 'Market', clothes: 'Clothing', furniture: 'Furniture', antiques: 'Antiques',
+        amusement_arcade: 'Arcade', fitness_centre: 'Fitness', sports_centre: 'Sports', escape_game: 'Escape Room', bowling_alley: 'Bowling', beauty: 'Salon', hairdresser: 'Hair', florist: 'Flowers', bakery: 'Bakery', convenience: 'Market', clothes: 'Clothing', furniture: 'Furniture', antiques: 'Antiques',
         car_repair: 'Auto Repair', car_parts: 'Auto Parts', toys: 'Toys', books: 'Books', hardware: 'Hardware', supermarket: 'Grocery', alcohol: 'Liquor', gift: 'Gifts',
     };
     return map[k] ?? (k ? k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '');

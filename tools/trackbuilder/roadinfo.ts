@@ -23,6 +23,8 @@ export interface LaneSet {
     /** Painted edge lines (rural roads; urban streets with kerbs and sidewalks usually have none). */
     edgeLines: boolean;
     laneWidth: number;
+    /** A service way (parking aisle, lot entrance, driveway, drive-through): no markings, paved flush to the sides. */
+    lot?: boolean;
 }
 
 export interface BridgeSpan {
@@ -99,13 +101,16 @@ export function laneSet(tags: Record<string, string>, dir: 1 | -1): LaneSet {
     }
     const urban = /^(both|left|right|separate|yes)$/.test(tags.sidewalk ?? tags['sidewalk:both'] ?? tags['sidewalk:left'] ?? tags['sidewalk:right'] ?? '') && (mphOf(tags.maxspeed) || 30) <= 35;
     const laneWidth = hw === 'motorway' || hw === 'trunk' ? 3.65 : hw === 'primary' || hw === 'secondary' ? 3.5 : hw === 'tertiary' ? 3.35 : 3.1;
-    return { fwd, bwd, centreTurn, oneway, turnFwd, turnBwd, extraL, extraR, edgeLines: !urban, laneWidth };
+    const lot = hw === 'service';
+    return { fwd, bwd, centreTurn, oneway, turnFwd, turnBwd, extraL, extraR, edgeLines: !urban && !lot, laneWidth, ...(lot ? { lot } : {}) };
 }
 
 /** Carriageway width (asphalt) for a way, metres. */
 export function wayWidth(tags: Record<string, string>, ls: LaneSet): number {
     const tagged = metres(tags['width:carriageway'] ?? tags.width);
     if (tagged >= 3 && tagged <= 40) return tagged;
+    // Service ways: parking aisles are two cars wide plus room; drive-throughs and driveways one car.
+    if (ls.lot) return tags.service === 'parking_aisle' ? 7.2 : tags.service === 'drive-through' ? 3.8 : tags.service === 'driveway' ? 4.2 : 6.6;
     const lanes = ls.fwd + ls.bwd + (ls.centreTurn ? 1 : 0);
     // Residential streets without lane markings are a shared surface, usually ~8 m kerb to kerb.
     const unmarked = tags.lane_markings === 'no' && !tags.lanes;

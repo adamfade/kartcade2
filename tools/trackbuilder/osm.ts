@@ -13,7 +13,7 @@ export interface OsmLine { id: number; line: LatLon[]; tags: Record<string, stri
 /** A road with its node ids, so junctions (shared nodes) and signals on it can be found. */
 export interface OsmWay { id: number; nodes: number[]; line: LatLon[]; tags: Record<string, string> }
 
-export const OSM_VERSION = 3;
+export const OSM_VERSION = 4;
 /** Highways a car can use (side streets, the route itself). */
 export const DRIVABLE = /^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)(_link)?$/;
 
@@ -81,6 +81,7 @@ export function overpassQuery(b: GeoBox, route?: LatLon[]): string {
   node["amenity"~"^(restaurant|cafe|fast_food|bar|pub|bank|pharmacy|post_office|library|clinic|dentist|doctors|ice_cream|fuel|car_wash|veterinary)$"](around:120,${L});
   node["office"](around:120,${L});
   node["craft"](around:120,${L});
+  node["leisure"~"^(amusement_arcade|fitness_centre|sports_centre|escape_game|bowling_alley)$"](around:120,${L});
   way["amenity"="parking"](around:200,${L});
   way["leisure"~"^(park|pitch|playground|golf_course)$"](around:300,${L});
   way["landuse"~"^(grass|meadow|cemetery|recreation_ground|village_green)$"](around:300,${L});`;
@@ -141,7 +142,7 @@ export function parseOverpass(json: { elements?: El[] }, bbox: GeoBox, fetched: 
             if (e.lat == null || e.lon == null) continue;
             if (t.natural === 'tree') f.trees.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
             else if (t.highway || t.traffic_sign || t.railway === 'level_crossing' || t.emergency === 'fire_hydrant' || t.power === 'pole' || t.power === 'tower') f.points!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
-            else if (t.shop || t.amenity || t.office || t.craft) f.pois!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
+            else if (t.shop || t.amenity || t.office || t.craft || /^(amusement_arcade|fitness_centre|sports_centre|escape_game|bowling_alley)$/.test(t.leisure ?? '')) f.pois!.push({ id: e.id, at: { lat: e.lat, lon: e.lon }, tags: t });
             continue;
         }
         if (e.type === 'way' && t.highway && DRIVABLE.test(t.highway) && t.area !== 'yes') {

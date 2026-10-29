@@ -297,3 +297,30 @@ export function rippleNormals(N = 256): Rgba {
     }
     return { width: N, height: N, data };
 }
+
+/**
+ * Split parts by mapped areas: triangles whose centre lies inside any of the areas go to `inside` (named by
+ * `rename`), the rest stay as they were. Materials, UVs and normals are kept.
+ */
+export function splitInside(parts: MeshPart[], areas: { rings: { lat: number; lon: number }[][] }[], proj: Projection, rename: (name: string) => string): { inside: MeshPart[]; outside: MeshPart[] } {
+    if (!areas.length) return { inside: [], outside: parts };
+    const boxes = areas.map((a) => ({ rings: a.rings, box: ringBox(a.rings) }));
+    const isIn = (x: number, z: number) => {
+        const p = proj.toLatLon({ x, y: z });
+        return boxes.some((a) => p.lat >= a.box.south && p.lat <= a.box.north && p.lon >= a.box.west && p.lon <= a.box.east && a.rings.some((r) => inLatLonRing(p, r)));
+    };
+    const inside: MeshPart[] = [], outside: MeshPart[] = [];
+    for (const part of parts) {
+        const keep: number[] = [], take: number[] = [];
+        for (let t = 0; t < part.indices.length; t += 3) {
+            const [a, b, c] = [part.indices[t], part.indices[t + 1], part.indices[t + 2]];
+            const cx = (part.positions[a * 3] + part.positions[b * 3] + part.positions[c * 3]) / 3, cz = (part.positions[a * 3 + 2] + part.positions[b * 3 + 2] + part.positions[c * 3 + 2]) / 3;
+            (isIn(cx, cz) ? take : keep).push(a, b, c);
+        }
+        if (!take.length) { outside.push(part); continue; }
+        if (keep.length) outside.push({ ...part, indices: keep });
+        // The taken triangles keep the same vertex arrays (unused vertices are harmless).
+        inside.push({ ...part, name: rename(part.name), indices: take });
+    }
+    return { inside, outside };
+}

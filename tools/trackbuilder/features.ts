@@ -316,6 +316,8 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
         const near = Math.min(...ring.map((p) => routeEdge(p, detailM + 60))) < detailM;
         // Businesses in or beside this footprint.
         const mine = near ? pois.filter((q) => Math.abs(q.p.x - centre.x) < 80 && Math.abs(q.p.y - centre.y) < 80 && (inRing(q.p, ring) || ringDist(q.p, ring) < 6)) : [];
+        // Units mapped as their own building with the business on it (strip malls often are).
+        if (near && t.name && (t.shop || t.amenity || t.office || t.craft || t.leisure)) mine.push({ p: centre, tags: t });
         const barn = /^(barn|farm_auxiliary|shed|stable|cowshed|greenhouse)$/.test(tag);
         const shopTag = /^(retail|commercial|supermarket|kiosk)$/.test(tag) || !!t.shop || !!t.amenity && /^(restaurant|cafe|fast_food|bar|pub|bank|pharmacy)$/.test(t.amenity);
         const big = /^(commercial|industrial|retail|warehouse|supermarket|school|hospital|office|apartments|civic|public|church)$/.test(tag) || area > 700;

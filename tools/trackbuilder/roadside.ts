@@ -33,7 +33,7 @@ export interface RoadsideOptions {
     occupancy?: number;
 }
 
-export interface RoadsideStats { lamps: number; poles: number; lidarPoles: number; wires: number; hydrants: number; mailboxes: number; parkedCars: number; lotCars: number; driveways: number; ramps: number }
+export interface RoadsideStats { stallLines: number; lamps: number; poles: number; lidarPoles: number; wires: number; hydrants: number; mailboxes: number; parkedCars: number; lotCars: number; driveways: number; ramps: number }
 
 function rng(seed: number) { let s = seed >>> 0 || 1; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
 function hash2(x: number, y: number) { let h = Math.imul(Math.round(x * 10) | 0, 73856093) ^ Math.imul(Math.round(y * 10) | 0, 19349663); h = Math.imul(h ^ (h >>> 13), 0x5bd1e995); return ((h ^ (h >>> 15)) >>> 0) / 4294967296; }
@@ -55,7 +55,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
     const proj = cl.projection, P = cl.points, n = P.length;
     const L = (p: { lat: number; lon: number }): P2 => proj.toLocal(p);
     const lights: V3[] = [];
-    const stats: RoadsideStats = { lamps: 0, poles: 0, lidarPoles: 0, wires: 0, hydrants: 0, mailboxes: 0, parkedCars: 0, lotCars: 0, driveways: 0, ramps: 0 };
+    const stats: RoadsideStats = { stallLines: 0, lamps: 0, poles: 0, lidarPoles: 0, wires: 0, hydrants: 0, mailboxes: 0, parkedCars: 0, lotCars: 0, driveways: 0, ramps: 0 };
     const occ = opts.occupancy ?? 0.6;
 
     // ------------------------------------------------ lookups
@@ -72,7 +72,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
     const right = (i: number) => ({ x: cl.tangents[i].y, y: -cl.tangents[i].x });
     const idxAt = (sM: number) => { const x = Math.max(0, Math.min(cl.length, sM)); let lo = 0, hi = n - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cl.s[mid] <= x) lo = mid; else hi = mid - 1; } return lo; };
     const at = (i: number, lat: number): P2 => { const r = right(i); return { x: P[i].x + r.x * lat, y: P[i].y + r.y * lat }; };
-    const urban = (i: number) => !!road && !road.lanes[i]?.edgeLines;
+    const urban = (i: number) => !!road && !road.lanes[i]?.edgeLines && !road.lanes[i]?.lot;
     const H = (p: P2) => { const q = nearest(p, 40); if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + g.vergeReach(q.i, q.lat < 0 ? -1 : 1)) return g.surfaceAt(q.i, q.lat); return ground(p.x, p.y) ?? (q.i >= 0 ? g.surfaceAt(q.i, q.lat) : 0); };
     const stubSegs = (opts.stubs ?? []).flatMap((st) => st.pts.slice(1).map((b, k) => ({ a: st.pts[k], b, h: st.half })));
     const onStub = (p: P2, pad = 0) => stubSegs.some((s) => { const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p.x - s.a.x) * dx + (p.y - s.a.y) * dy) / l2)); return Math.hypot(p.x - s.a.x - dx * t, p.y - s.a.y - dy * t) < s.h + pad; });
@@ -378,6 +378,18 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
             if (vv > v1 - 2.6) continue;
             for (let u = u0 + 1.5; u < u1 - 1.4; u += 2.75) {
                 const p = { x: ctr.x + ax.x * u + ay.x * vv, y: ctr.y + ax.y * u + ay.y * vv };
+                // Stall line on the stall's left edge (and the last stall's right edge), 10 cm wide, 5 m long.
+                for (const du of u + 2.75 >= u1 - 1.4 ? [-1.375, 1.375] : [-1.375]) {
+                    const c = { x: p.x + ax.x * du, y: p.y + ax.y * du };
+                    const ends = [-2.5, 2.5].map((dv) => ({ x: c.x + ay.x * dv, y: c.y + ay.y * dv }));
+                    if (!ends.every((e) => inRing(e, ring))) continue;
+                    if (ends.some((e) => { const q = nearest(e, 40); return q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + 0.3; }) || ends.some((e) => onStub(e, 0.3))) continue;
+                    const m = mesh('PAINT_STALLS', c, 'paint_white', { castShadows: false });
+                    const w = { x: ax.x * 0.05, y: ax.y * 0.05 };
+                    const P = (e: P2, sg: number): V3 => [e.x + w.x * sg, H(e) + 0.03, e.y + w.y * sg];
+                    m.face([P(ends[0], -1), P(ends[1], -1), P(ends[1], 1), P(ends[0], 1)], [0, 1, 0], [[0, 0], [0, 5 / 4], [0.1 / 4, 5 / 4], [0.1 / 4, 0]]);
+                    stats.stallLines++;
+                }
                 if (!inRing(p, ring) || rand() > occ) continue;
                 const q = nearest(p, 40);
                 if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + 3) continue;

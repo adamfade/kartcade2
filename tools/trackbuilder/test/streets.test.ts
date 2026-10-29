@@ -402,3 +402,49 @@ test('night lights and horizon: lamp light series, window glow, tiling fix, a cu
     const k = readKn5(res.files['valley_st/valley_st.kn5']);
     assert.equal(k.consumed, k.total);
 });
+
+test('pulling into a parking lot: the route ends down a parking aisle, paved flush, no lane lines, drivable lot', () => {
+    const lat0 = 45.39, lon0 = -122.64, mLon = 111_320 * Math.cos((lat0 * Math.PI) / 180), mLat = 111_120;
+    const ll = (east: number, north: number): LatLon => ({ lat: lat0 + north / mLat, lon: lon0 + east / mLon });
+    const flat = () => 40;
+    // Main street east 0..300 m, then a left turn north up a parking aisle into the lot.
+    const main: LatLon[] = []; for (let e = 0; e <= 300; e += 25) main.push(ll(e, 0));
+    const aisle: LatLon[] = [ll(300, 0), ll(300, 20), ll(300, 45), ll(300, 70)];
+    const line = [...main, ...aisle.slice(1)];
+    let nid = 5000;
+    const mainIds = main.map(() => nid++), aisleIds = [mainIds[mainIds.length - 1], nid++, nid++, nid++];
+    const site = syntheticSite(line, flat);
+    const sq = (e0: number, n0: number, e1: number, n1: number) => [ll(e0, n0), ll(e1, n0), ll(e1, n1), ll(e0, n1), ll(e0, n0)];
+    site.osm = {
+        version: OSM_VERSION, fetched: 'test', bbox: site.overview!.bbox, buildings: [{ id: 1, ring: sq(270, 95, 330, 115), tags: { building: 'retail' } }], woods: [], trees: [], barriers: [], water: [],
+        roads: [
+            { id: 1, nodes: mainIds, line: main, tags: { highway: 'primary', name: 'Willamette Drive', lanes: '2', sidewalk: 'both', maxspeed: '35 mph' } },
+            { id: 2, nodes: aisleIds, line: aisle, tags: { highway: 'service', service: 'parking_aisle' } },
+        ],
+        points: [], pois: [{ id: 3, at: ll(300, 96), tags: { leisure: 'amusement_arcade', name: 'Kartcade' } }], power: [],
+        areas: [{ id: 4, rings: [sq(262, 12, 338, 90)], tags: { amenity: 'parking' } }],
+    };
+    const res = buildTrack({ name: 'To Kartcade', polyline: line, heightSampler: flat, width: 7, site });
+    const cl = res.centerline, n = cl.points.length, r = res.road!;
+    // The last stretch is the aisle: a lot row, ~7 m wide, no edge lines.
+    assert.ok(r.lanes[n - 3].lot && !r.lanes[n - 3].edgeLines);
+    assert.ok(Math.abs(r.width[n - 3] - 7.2) < 0.5, `aisle width ${r.width[n - 3]}`);
+    // Flush paved shoulders in the lot, sidewalks back on the street.
+    assert.ok(res.geometry.parts.some((p) => p.name.startsWith('1ROAD_LOT_') && p.material === 'lot'));
+    assert.ok(res.geometry.parts.some((p) => p.name.startsWith('1ROAD_WALK')));
+    // The lot beside the aisle is drivable (ROAD physics) and keeps the aerial look.
+    assert.ok(res.geometry.parts.some((p) => p.name.startsWith('1ROAD_LOTV_') && p.material.startsWith('aerial_')));
+    // No lane lines on the aisle (the road's own paint stops before the lot).
+    for (const p of res.geometry.parts.filter((q) => /^PAINT_(WHITE|YELLOW)/.test(q.name))) for (let k = 0; k < p.positions.length; k += 3) assert.ok(p.positions[k + 2] < 25, `lane paint in the lot at z=${p.positions[k + 2].toFixed(1)}`);
+    // Stall lines and parked cars in the lot, none on the aisle.
+    const rs = res.roadsideStats!;
+    assert.ok(rs.stallLines >= 6 && rs.lotCars >= 2, JSON.stringify(rs));
+    for (const p of res.streets.filter((q) => /^(RS_LOTCARS|PAINT_STALLS)/.test(q.name))) for (let k = 0; k < p.positions.length; k += 3) {
+        const x = p.positions[k], z = p.positions[k + 2];
+        if (z > 15) assert.ok(Math.abs(x - 300) > 3.6 - 0.05, `${p.name} on the aisle at x=${x.toFixed(2)} z=${z.toFixed(1)}`);
+    }
+    // The storefront the aisle leads to carries the business name.
+    assert.ok(res.featureStats.detail!.storefronts >= 1);
+    const k = readKn5(res.files['to_kartcade/to_kartcade.kn5']);
+    assert.equal(k.consumed, k.total);
+});

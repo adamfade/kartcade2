@@ -55,6 +55,8 @@ export interface MeshOptions {
     bridges?: { i0: number; i1: number }[];
     /** Per sample: an urban street with sidewalks, so the shoulder is a raised concrete walk, not gravel. */
     urban?: ArrayLike<boolean | number>;
+    /** Per sample: a parking lot or service way, paved flush to the sides (no kerb, no gravel). */
+    lot?: ArrayLike<boolean | number>;
 }
 
 /** Bridge walkway (kerb + sidewalk) width beyond the asphalt; parapets stand at its outer edge. */
@@ -250,7 +252,10 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     // prof[0] = left, prof[1] = right: offsets beyond the asphalt edge and their heights, per row.
     const prof: { offs: number[]; ys: number[] }[][] = [new Array(n), new Array(n)];
     const steps = opts.lidar ? [0, 0, 0.8, 1.8, 3, 5, 8, 12, 18, 26, 36] : [0, 0, 3, 10, 22];
-    const urbanRow = (i: number) => !!opts.urban?.[i];
+    const lotRow = (i: number) => !!opts.lot?.[i];
+    const urbanRow = (i: number) => !!opts.urban?.[i] && !lotRow(i);
+    /** Shoulder kind per row: 0 gravel (rural), 1 sidewalk (urban), 2 paved lot. */
+    const shoulderKind = (i: number) => (lotRow(i) ? 2 : urbanRow(i) ? 1 : 0);
     const sideRow = (i: number, side: -1 | 1) => {
         const half = hw(i);
         const edge = surf(i, side * half);
@@ -272,15 +277,15 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
             const lat = side * (half + d);
             const p = at(i, lat, 0);
             // Shoulder a touch below the asphalt; on urban streets a sidewalk rising to kerb height.
-            const walk = urbanRow(i);
-            const shoulderY = walk ? edge + 0.15 : edge - 0.03;
+            const walk = urbanRow(i), flush = lotRow(i);
+            const shoulderY = walk ? edge + 0.15 : flush ? edge - 0.005 : edge - 0.03;
             // Urban: the sidewalk is flat at kerb height right from the asphalt edge (the kerb face is its own mesh).
             let y = k === 0 ? (walk ? edge + 0.15 : edge) : shoulderY;
             if (k >= 2 && opts.ground) {
                 const g = opts.ground(p[0], p[2]);
                 // Lidar: the real ground (it already contains the road bench, ditches and cuttings), eased in
                 // over 1.5 m from the shoulder. Coarse elevation: a long blend hides its 10 m cells.
-                const from = walk ? shoulderY - 0.02 : edge - 0.05;
+                const from = walk ? shoulderY - 0.02 : flush ? edge - 0.01 : edge - 0.05;
                 if (g != null && Number.isFinite(g)) y = opts.lidar
                     ? from + (g - from) * smoothstep((d - shoulder) / 1.5)
                     : edge + (g - edge) * smoothstep((d - shoulder) / (verge * 0.6));
@@ -312,21 +317,21 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         i = j + 1;
     }
     // Shoulder strips also change between gravel (rural) and sidewalk (urban); verges run on regardless.
-    const shoulderRuns: [number, number, boolean][] = [];
+    const shoulderRuns: [number, number, boolean, number][] = [];
     for (const [a, b] of runs) {
         let k = a;
         while (k < b) {
-            const u = urbanRow(ix(k));
-            let j = k; while (j < b && urbanRow(ix(j + 1)) === u) j++;
-            shoulderRuns.push([k, Math.min(b, j + 1), u]);
+            const kind = shoulderKind(ix(k));
+            let j = k; while (j < b && shoulderKind(ix(j + 1)) === kind) j++;
+            shoulderRuns.push([k, Math.min(b, j + 1), kind === 1, kind]);
             k = j + 1;
         }
     }
-    shoulderRuns.forEach(([a, b, u], r) => {
+    shoulderRuns.forEach(([a, b, , kind], r) => {
         const sfx = shoulderRuns.length > 1 ? `_r${r}` : '';
         const sl = (rows: V3[][]) => rows.slice(a, b + 1);
         const row = (i: number) => a + i;
-        const [name, mat] = u ? ['1ROAD_WALK', 'sidewalk'] : ['1GRAVEL', 'shoulder'];
+        const [name, mat] = kind === 1 ? ['1ROAD_WALK', 'sidewalk'] : kind === 2 ? ['1ROAD_LOT', 'lot'] : ['1GRAVEL', 'shoulder'];
         parts.push(...gridParts(`${name}_L${sfx}`, mat, sl(Ls), (i, j) => { const h = hw(ix(row(i))); return [shU(j === 0 ? -(h + shoulder) : -h), sRow(row(i)) / MACRO_M.shoulder]; }, (i) => tangent3(row(i))));
         parts.push(...gridParts(`${name}_R${sfx}`, mat, sl(Rs), (i, j) => { const h = hw(ix(row(i))); return [shU(j === 0 ? h : h + shoulder), sRow(row(i)) / MACRO_M.shoulder]; }, (i) => tangent3(row(i))));
     });
@@ -463,6 +468,7 @@ interface LineAt { lat: number; colour: 'white' | 'yellow'; pattern: 'solid' | '
  */
 function linesAt(i: number, h: number, ls: LaneSet, centre: CentreStyle, plan: MarkingPlan): Map<string, LineAt> {
     const out = new Map<string, LineAt>();
+    if (ls.lot) return out; // parking aisles and service ways carry no lane lines
     const OFF = 0.1; // half the gap between the lines of a pair, plus half a line
     const edges = plan.edges && ls.edgeLines;
     // Travel lanes span [L0, R0]; kerbside lanes (parking, bike) sit outside them.
