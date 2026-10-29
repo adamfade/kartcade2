@@ -75,6 +75,7 @@ coverage (`MipKind 'cutout'`), so forests don't thin out with distance.
 | 5d | Road surface (`roadsurface.ts`): real repair patches read from the aerial photo, tar crack sealant, manholes, storm drains; worn, alpha-tested paint | done |
 | 5e | Night (CSP): light series for street lamps, porch lights and shop windows; emissive adjustments for lit windows, shop glass, signs and lamp lenses on `NightLights`; CSP tiling fix on photo-detail materials; per-pixel fog on the horizon | done |
 | 5f | Review (`ReviewPanel.tsx`): notes pinned in the preview with a view-from-the-road and a Street View compare (same spot, facing the pin), a copyable checklist; facade photos; the preview honours `lodIn`/`lodOut` | done |
+| 5g | Compare (`StreetViewPane.tsx`, `DriveVideoPane.tsx`, `drivelog.ts`, `warp.ts`): Google's Street View viewer beside the preview, following ground view (embedded, never stored); the driver's own video with its GPS log driving ground view frame by frame (`follow`, `onViewChange` on the preview), notes at the video's spot, and frames straightened into facade photos | done |
 
 ## Builds
 

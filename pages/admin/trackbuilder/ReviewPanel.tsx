@@ -37,6 +37,8 @@ interface Props {
     setPhotos: (p: FacadePhoto[]) => void;
     /** A facade spot was clicked and is waiting for its photo. */
     pendingPhoto: Omit<FacadePhoto, 'dataUrl' | 'id'> | null;
+    /** A straightened frame from the drive video, waiting for its wall to be clicked. */
+    pendingFrame?: string | null;
     onPhotoChosen: (file: File) => void;
     cancelPhoto: () => void;
     activeId: string | null;
@@ -69,7 +71,7 @@ export async function dataUrlToRgba(url: string): Promise<{ width: number; heigh
     return { width: 512, height: 512, data: new Uint8Array(ctx.getImageData(0, 0, 512, 512).data.buffer.slice(0)) };
 }
 
-const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, setPhotos, pendingPhoto, onPhotoChosen, cancelPhoto, activeId, setActiveId, onView, onStreetView }) => {
+const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, setPhotos, pendingPhoto, pendingFrame, onPhotoChosen, cancelPhoto, activeId, setActiveId, onView, onStreetView }) => {
     const file = useRef<HTMLInputElement>(null);
     const open = notes.filter((n) => !n.done).length;
     const copy = () => {
@@ -89,7 +91,14 @@ const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, 
                 <button type="button" className={btn(tool === 'photo')} onClick={() => setTool(tool === 'photo' ? null : 'photo')} disabled={photos.length >= MAX_FACADE_PHOTOS}><Camera className="w-4 h-4" /> Facade photo</button>
             </div>
             {tool === 'note' && <p className="text-xs text-white/50">Click anything in the preview to pin a note there (a missing sign, a wrong building, a tree in the road).</p>}
-            {tool === 'photo' && !pendingPhoto && <p className="text-xs text-white/50">Click the wall of a landmark building in the preview, then choose your own photo of that side of it. Your own photos only, never Street View or Google images.</p>}
+            {tool === 'photo' && pendingFrame && (
+                <div className="rounded-lg border border-[#F5B700]/40 bg-[#F5B700]/5 p-2 text-xs flex items-center gap-2">
+                    <img src={pendingFrame} alt="Frame from your drive" className="w-12 h-12 object-cover rounded" />
+                    <span className="flex-1">Frame from your drive is ready. Click that wall in the 3D view.</span>
+                    <button type="button" onClick={cancelPhoto} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button>
+                </div>
+            )}
+            {tool === 'photo' && !pendingPhoto && !pendingFrame && <p className="text-xs text-white/50">Click the wall of a landmark building in the preview, then choose your own photo of that side of it. Your own photos only, never Street View or Google images.</p>}
             {pendingPhoto && (
                 <div className="rounded-lg border border-[#F5B700]/40 bg-[#F5B700]/5 p-2 text-xs flex items-center gap-2">
                     <span className="flex-1">Wall at {m(pendingPhoto.s)} picked.</span>

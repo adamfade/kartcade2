@@ -37,6 +37,8 @@ export interface TrackProject {
     reviewNotes?: { id: string; s: number; point: { x: number; y: number; z: number }; text: string; done?: boolean }[];
     /** The driver's own facade photos (512 px JPEG data URLs), applied to the wall nearest each point. */
     facadePhotos?: { id: string; s: number; point: { x: number; y: number; z: number }; at: { lat: number; lon: number }; dataUrl: string; label?: string }[];
+    /** The driver's own drive of the route: GPS log (packed) and video sync. The video itself stays on their computer. */
+    drive?: { video: string; log: string; t0: number; data: number[]; videoStartMs: number | null; offsetMs: number } | null;
     stats?: { lengthM: number; climbM: number } | null;
     createdBy?: string;
     updatedBy?: string;

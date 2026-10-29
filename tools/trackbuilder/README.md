@@ -23,6 +23,8 @@ Two ways to run it, sharing the same library:
 | Elevation | AWS Terrain Tiles, Terrarium encoding (s3.amazonaws.com/elevation-tiles-prod), zoom 14 | Open data. Attribution for the underlying sources (USGS 3DEP/NED in the US, and others) is listed at https://github.com/tilezen/joerd/blob/master/docs/attribution.md |
 | Map display | OpenStreetMap standard tiles | ODbL / OSM tile usage policy. Shown in the page only. |
 | Aerial view (off by default) | Esri World Imagery (server.arcgisonline.com) | Esri terms. **Map display only**: it is never baked into the track. |
+| Street View compare (optional) | Google Maps Embed API, Street View mode (needs `VITE_GOOGLE_MAPS_EMBED_KEY`) | Google's own viewer shown beside the preview; Google lists the Embed API as free with unlimited requests. Nothing is downloaded or stored, and Street View imagery never goes into a track. Without a key the editor links to Street View instead (Maps URLs, no key). |
+| Your drive (optional) | Your own phone or dashcam video and GPS log | Yours: the video stays on your computer; the GPS log (1 Hz) is saved with the project. Frames you straighten may be used as facade photos. |
 
 Every track's `ui_track.json` and `README.txt` carry the OSM attribution ("© OpenStreetMap contributors, ODbL").
 Textures are generated in code (asphalt with lines, grass, concrete), so the output contains no third-party
@@ -92,6 +94,22 @@ Model details:
 - **Lidar surface:** the USGS point cloud along the road (`lidar.ts`, decoded with laz-perf) gives real building
   heights and roof shapes, buildings OSM lacks, and every tree at its real spot and height.
 
+- **Compare** (above the preview) puts a second pane beside it:
+  - *Street View*: Google's viewer at the same spot as ground view, facing the same way, following it as you move
+    (it reloads once the view settles). Its controls sit above it, so Google's logo and notices stay visible.
+    Needs a Maps Embed API key in `VITE_GOOGLE_MAPS_EMBED_KEY` (restrict it to the Maps Embed API and the site's
+    addresses); without one the pane opens the same spot in a new tab.
+  - *My drive video* (`DriveVideoPane.tsx`, `drivelog.ts`): choose a video you recorded driving the route and the
+    GPS log recorded with it (GPX, KML `gx:Track`, GeoJSON with `coordTimes`, or CSV with time, latitude and
+    longitude). While it plays, ground view stands at the same spot on the road (looking down the lane; phone GPS
+    is too rough for the side-to-side position). The start time comes from the video file (Apple's creation date,
+    else the MP4 `mvhd` time); nudge it with the ±0.2/1/5 s buttons, or pause where you recognise the spot, put
+    ground view there with follow off, and press *Line up with 3D view*. *Note here* pins a review note at that
+    spot; *Facade from frame* lets you click a wall's four corners on the frame and straightens it (`warp.ts`)
+    into a facade photo, placed by clicking that wall in the preview.
+  - Recording: a phone on the dash (landscape, camera level) plus a GPS logging app that saves GPX, started a few
+    seconds before the video. GoPro's built-in GPS track isn't read yet; export it to GPX first.
+
 See ARCHITECTURE.md for the full pipeline.
 
 ## Circuit mode
@@ -139,7 +157,8 @@ read-back, required node names, the AI file layout, verge overlap, trace parsing
 contents and ui_track.json. `test/streets.test.ts`, `test/buildings.test.ts` and the tree tests cover the real-road
 layers on a synthetic valley scene: lanes, bridges, junctions and signals, lidar decoding, ground classes and the
 multilayer mask, water, kerbs, poles and wires, parked cars, road patches and cracks, night lights, the horizon
-ring, tree models and billboards, and building detail.
+ring, tree models and billboards, and building detail. `test/drive.test.ts` covers drive logs (GPX, KML,
+GeoJSON, CSV), matching GPS to the route across a hairpin, the video start time and the facade warp.
 
 The Pete's Mountain Rd build (West Linn, 5.77 km, 252 m of climb) was also checked with a separate validator
 written independently from these formats. It passed with no failures or warnings, and the browser build matched

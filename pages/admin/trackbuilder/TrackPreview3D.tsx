@@ -36,8 +36,17 @@ interface Props {
     goTo: { s: number; nonce: number; look?: { x: number; y: number; z: number } } | null;
     /** Review notes and facade-photo spots, drawn as pins. */
     pins?: ReviewPin[];
+    /** While set, ground view follows this spot every frame (the drive video playing beside the preview). */
+    follow?: React.MutableRefObject<FollowView | null>;
+    /** Ground view's position and facing, reported a few times a second (null in the overview). */
+    onViewChange?: (v: ViewInfo | null) => void;
     className?: string;
 }
+
+/** A spot to follow: distance along the route and lateral offset (NaN = the right-hand travel lane). */
+export interface FollowView { s: number; lat: number }
+/** Where ground view stands and looks: compass heading and pitch in degrees. */
+export interface ViewInfo { s: number; at: { lat: number; lon: number }; headingDeg: number; pitchDeg: number }
 
 type Mode = 'orbit' | 'ground';
 
@@ -235,10 +244,10 @@ function applyLods(scene: THREE.Scene, camera: THREE.Camera) {
 }
 
 /**
- * Open Google Street View at distance s along the track, facing the direction of travel. Linking out with the
- * Maps URLs API is allowed; Street View imagery itself must never be copied into a track.
+ * The Street View spot for distance s along the track: position (lateral offset `lat`) and facing, from a compass
+ * heading, a point to look at (x east, z north) or the direction of travel.
  */
-export function openStreetView(build: BuildResult, s: number, view?: { lat?: number; headingDeg?: number; pitchDeg?: number; look?: { x: number; z: number } }) {
+export function streetViewSpot(build: BuildResult, s: number, view?: { lat?: number; headingDeg?: number; pitchDeg?: number; look?: { x: number; z: number } }) {
     const c = build.centerline;
     const x = c.closed ? ((s % c.length) + c.length) % c.length : Math.max(0, Math.min(c.length, s));
     let i = 0;
@@ -249,11 +258,20 @@ export function openStreetView(build: BuildResult, s: number, view?: { lat?: num
     // Facing: the given compass heading, or towards a point (x east, z north), or along the road.
     const deg = view?.headingDeg ?? (view?.look ? (Math.atan2(view.look.x - at.x, view.look.z - at.y) * 180) / Math.PI : (Math.atan2(t.x, t.y) * 180) / Math.PI);
     const heading = Math.round(((deg % 360) + 360) % 360), pitch = Math.round(Math.max(-60, Math.min(60, view?.pitchDeg ?? 0)));
-    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll.lat.toFixed(6)},${ll.lon.toFixed(6)}&heading=${heading}&pitch=${pitch}&fov=80`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    return { lat: ll.lat, lon: ll.lon, heading, pitch };
 }
 
-const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPick, goTo, pins, className }) => {
+/** Link that opens Google Street View (Maps URLs API; no key). Imagery is never copied into a track. */
+export function streetViewLink(v: { lat: number; lon: number; heading: number; pitch: number }) {
+    return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${v.lat.toFixed(6)},${v.lon.toFixed(6)}&heading=${Math.round(v.heading)}&pitch=${Math.round(v.pitch)}&fov=80`;
+}
+
+/** Open Google Street View at distance s along the track, facing the direction of travel (or as given). */
+export function openStreetView(build: BuildResult, s: number, view?: { lat?: number; headingDeg?: number; pitchDeg?: number; look?: { x: number; z: number } }) {
+    window.open(streetViewLink(streetViewSpot(build, s, view)), '_blank', 'noopener,noreferrer');
+}
+
+const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPick, goTo, pins, follow, onViewChange, className }) => {
     const host = useRef<HTMLDivElement>(null);
     const three = useRef<{
         renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls;
@@ -265,8 +283,8 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
     const [where, setWhere] = useState<number | null>(null); // distance shown in ground view
     // Mutable view state read by the render loop (refs avoid re-running effects every frame).
     const view = useRef({ mode: 'orbit' as Mode, s: 0, lat: 0, yaw: 0, pitch: -0.03, driving: false });
-    const props = useRef({ build, picking, onPick, groundPrompt });
-    props.current = { build, picking, onPick, groundPrompt };
+    const props = useRef({ build, picking, onPick, groundPrompt, follow, onViewChange });
+    props.current = { build, picking, onPick, groundPrompt, follow, onViewChange };
 
     const cl = build.centerline;
     // NaN = follow the right-hand travel lane (it moves as lanes come and go); a number = fixed offset.
@@ -439,9 +457,33 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
         renderer.domElement.addEventListener('keydown', onKey);
 
         let raf = 0, last = performance.now(), shown = -1;
+        let reported = { at: 0, s: NaN, yaw: NaN, pitch: NaN, ground: false };
+        /** Tell the page where ground view stands (throttled; only when it moved or turned). */
+        const report = (now: number) => {
+            const cb = props.current.onViewChange, v = view.current;
+            if (!cb) return;
+            if (v.mode !== 'ground') { if (reported.ground) { reported = { ...reported, ground: false }; cb(null); } return; }
+            if (now - reported.at < 250) return;
+            if (reported.ground && Math.abs(v.s - reported.s) < 0.5 && Math.abs(v.yaw - reported.yaw) < 0.02 && Math.abs(v.pitch - reported.pitch) < 0.02) return;
+            reported = { at: now, s: v.s, yaw: v.yaw, pitch: v.pitch, ground: true };
+            const e = helpers.current.eye(v.s, v.lat), at = props.current.build.centerline.projection.toLatLon({ x: e.x, y: -e.z });
+            cb({ s: v.s, at, headingDeg: ((((-v.yaw * 180) / Math.PI) % 360) + 360) % 360, pitchDeg: (v.pitch * 180) / Math.PI });
+        };
         const tick = (now: number) => {
             const dt = Math.min(0.1, (now - last) / 1000); last = now;
             const v = view.current;
+            // Following the drive video: stand where the video is, looking down the road.
+            const f = props.current.follow?.current;
+            if (f) {
+                if (v.mode !== 'ground') enterGroundRef.current(f.s, f.lat);
+                const c = props.current.build.centerline;
+                v.driving = false;
+                v.s = c.closed ? ((f.s % c.length) + c.length) % c.length : Math.max(0, Math.min(c.length, f.s));
+                v.lat = f.lat;
+                const here = helpers.current.eye(v.s, v.lat), ahead = helpers.current.eye(v.s + 18, v.lat);
+                v.yaw = Math.hypot(ahead.x - here.x, ahead.z - here.z) > 1 ? Math.atan2(-(ahead.x - here.x), -(ahead.z - here.z)) : helpers.current.heading(v.s);
+                if (Math.round(v.s / 10) !== shown) { shown = Math.round(v.s / 10); setWhere(Math.round(v.s)); }
+            }
             if (v.mode === 'ground') {
                 controls.enabled = false;
                 if (v.driving) {
@@ -466,6 +508,7 @@ const TrackPreview3D: React.FC<Props> = ({ build, scenery, picking, marker, onPi
             }
             applyLods(scene, camera);
             renderer.render(scene, camera);
+            report(now);
             raf = requestAnimationFrame(tick);
         };
         raf = requestAnimationFrame(tick);

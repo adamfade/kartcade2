@@ -26,7 +26,10 @@ import type { TrackProject } from './trackProjects';
 import TrackPreview3D, { openStreetView } from './TrackPreview3D';
 import { LIBRARY_ROLES_FOR_BUILD, loadLibrary } from './materialLibrary';
 import type { MaterialLibrary } from '../../../tools/trackbuilder/materials.ts';
-import type { TrackPick } from './TrackPreview3D';
+import type { FollowView, TrackPick, ViewInfo } from './TrackPreview3D';
+import StreetViewPane from './StreetViewPane';
+import DriveVideoPane from './DriveVideoPane';
+import type { SavedDrive } from './DriveVideoPane';
 import SceneryPanel from './SceneryPanel';
 import ReviewPanel, { dataUrlToRgba, photoToDataUrl } from './ReviewPanel';
 import type { FacadePhoto, ReviewNote, ReviewTool } from './ReviewPanel';
@@ -136,10 +139,19 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const [reviewTool, setReviewToolRaw] = useState<ReviewTool | null>(null);
     const [pendingPhoto, setPendingPhoto] = useState<Omit<FacadePhoto, 'dataUrl' | 'id'> | null>(null);
     const [activeNote, setActiveNote] = useState<string | null>(null);
+    // Compare beside the preview: Google Street View (live, reference only) or the driver's own drive video.
+    const [compare, setCompare] = useState<'off' | 'street' | 'drive'>('off');
+    const [viewInfo, setViewInfo] = useState<ViewInfo | null>(null);
+    const follow = useRef<FollowView | null>(null);
+    const [drive, setDriveRaw] = useState<SavedDrive | null>(initial.drive ?? null);
+    const setDrive = (d: SavedDrive | null) => { setDriveRaw(d); touch(); };
+    /** A straightened frame from the drive video, waiting for its wall to be clicked. */
+    const [frameForFacade, setFrameForFacade] = useState<string | null>(null);
+    useEffect(() => { if (compare !== 'drive') follow.current = null; }, [compare]);
     const photoRgba = useRef(new Map<string, { width: number; height: number; data: Uint8Array }>());
     const setNotes = (n: ReviewNote[]) => { setNotesRaw(n); touch(); };
     const setPhotos = (p: FacadePhoto[]) => { setPhotosRaw(p); touch(); };
-    const setReviewTool = (t: ReviewTool | null) => { setReviewToolRaw(t); setPendingPhoto(null); if (t) { setToolRaw(null); setPendingFrom(null); } };
+    const setReviewTool = (t: ReviewTool | null) => { setReviewToolRaw(t); setPendingPhoto(null); if (t !== 'photo') setFrameForFacade(null); if (t) { setToolRaw(null); setPendingFrom(null); } };
 
     const pins = useMemo(() => (start && end ? [start, ...vias, end] : null), [start, vias, end]);
     const net: NetOptions = useMemo(() => ({ fetch: politeFetch, log: (m) => setLog((l) => [...l, m]) }), []);
@@ -367,7 +379,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                 id: projectId, name: name.trim() || 'Untitled track', kind,
                 pins: pins ?? [], loop, line, width: parseFloat(width) || null, walls, flipStart: flip, reverse,
                 gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined, siteId, realGround, bridgeStyles,
-                reviewNotes: notes, facadePhotos: photos,
+                reviewNotes: notes, facadePhotos: photos, drive,
                 stats: base ? { lengthM: base.stats.lengthM, climbM: base.stats.climbM } : (initial.stats ?? null),
             }, currentUser?.email);
             if (!projectId) { setProjectId(id); navigate(`/admin/track-builder?id=${id}`, { replace: true }); }
@@ -384,7 +396,13 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                 setActiveNote(id);
             } else {
                 const at = base.centerline.projection.toLatLon({ x: p.point.x, y: p.point.z });
-                setPendingPhoto({ s: p.s, point: p.point, at });
+                if (frameForFacade) {
+                    // A frame from the drive video was straightened first: this click places it.
+                    const total = photos.reduce((n, ph) => n + ph.dataUrl.length, 0) + frameForFacade.length;
+                    if (total > 500_000) { setError('That would make the saved project too big. Remove a facade photo first.'); return; }
+                    setPhotos([...photos, { id: elementId(), s: p.s, point: p.point, at, dataUrl: frameForFacade, label: 'Drive video frame' }]);
+                    setFrameForFacade(null); setReviewTool(null);
+                } else setPendingPhoto({ s: p.s, point: p.point, at });
             }
             return;
         }
@@ -546,16 +564,40 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
             {/* Step 2: 3D preview and scenery */}
             {base && scenery && (
                 <div className="grid lg:grid-cols-[1fr_340px] gap-6">
-                    <TrackPreview3D build={base} scenery={scenery} picking={!!tool || (!!reviewTool && !pendingPhoto)} marker={pendingFrom} onPick={onPick} goTo={goTo}
-                        pins={[...notes.map((n) => ({ id: n.id, point: n.point, done: n.done, active: n.id === activeNote })), ...photos.map((ph) => ({ id: ph.id, point: ph.point, done: true })), ...(pendingPhoto ? [{ id: 'pending', point: pendingPhoto.point, active: true }] : [])]}
-                        className="h-[600px] rounded-xl overflow-hidden border border-white/10 bg-black" />
+                    <div className="space-y-2 min-w-0">
+                        <div className="flex items-center gap-1 text-xs">
+                            <span className="text-white/40 mr-1">Compare with</span>
+                            {([['off', 'Nothing'], ['street', 'Street View'], ['drive', 'My drive video']] as const).map(([k, label]) => (
+                                <button key={k} type="button" onClick={() => setCompare(k)} className={`px-3 py-1.5 rounded-lg ${compare === k ? 'bg-[#D42428] text-white' : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10'}`}>{label}</button>
+                            ))}
+                        </div>
+                        <div className={compare === 'off' ? '' : 'grid md:grid-cols-2 gap-2'}>
+                            {compare === 'street' && <StreetViewPane view={viewInfo} className="h-[360px] md:h-[600px] rounded-xl overflow-hidden border border-white/10" />}
+                            {compare === 'drive' && (
+                                <DriveVideoPane build={base} drive={drive} setDrive={setDrive} followRef={follow} viewS={viewInfo?.s ?? null}
+                                    onNote={(s, text) => {
+                                        const c = base.centerline; let i = 0; while (i < c.points.length - 1 && c.s[i + 1] <= s) i++;
+                                        const id = elementId();
+                                        setNotes([...notes, { id, s, point: { x: c.points[i].x, y: base.geometry.surfaceAt(i, 0), z: c.points[i].y }, text }]);
+                                        setActiveNote(id);
+                                    }}
+                                    onFacadeFrame={(d) => { setReviewTool('photo'); setFrameForFacade(d); }}
+                                    className="h-[420px] md:h-[600px] rounded-xl overflow-hidden border border-white/10" />
+                            )}
+                            <TrackPreview3D build={base} scenery={scenery} picking={!!tool || (!!reviewTool && !pendingPhoto)} marker={pendingFrom} onPick={onPick} goTo={goTo}
+                                pins={[...notes.map((n) => ({ id: n.id, point: n.point, done: n.done, active: n.id === activeNote })), ...photos.map((ph) => ({ id: ph.id, point: ph.point, done: true })), ...(pendingPhoto ? [{ id: 'pending', point: pendingPhoto.point, active: true }] : [])]}
+                                follow={compare === 'drive' ? follow : undefined} onViewChange={compare === 'off' ? undefined : setViewInfo}
+                                className="h-[600px] rounded-xl overflow-hidden border border-white/10 bg-black" />
+                        </div>
+                    </div>
                     <div className="space-y-6">
                     <SceneryPanel tool={tool} setTool={setTool} options={toolOpts} setOptions={setToolOpts} pendingFrom={pendingFrom}
                         elements={elements} setElements={setElements} lengthM={base.centerline.length} circuit={base.centerline.closed}
                         onStreetView={(s) => openStreetView(base, s)}
                         onView={(s) => setGoTo({ s: base.centerline.closed ? s - 30 : Math.max(0, s - 30), nonce: Date.now() })} onQuick={onQuick} />
                     <ReviewPanel tool={reviewTool} setTool={setReviewTool} notes={notes} setNotes={setNotes} photos={photos} setPhotos={setPhotos}
-                        pendingPhoto={pendingPhoto} cancelPhoto={() => setPendingPhoto(null)} activeId={activeNote} setActiveId={setActiveNote}
+                        pendingPhoto={pendingPhoto} cancelPhoto={() => { setPendingPhoto(null); setFrameForFacade(null); }} activeId={activeNote} setActiveId={setActiveNote}
+                        pendingFrame={frameForFacade}
                         onPhotoChosen={async (f) => {
                             if (!pendingPhoto) return;
                             try {
