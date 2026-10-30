@@ -1,0 +1,11 @@
+{
+  "name": "kartcade-tv-hub",
+  "private": true,
+  "type": "module",
+  "description": "Local lap hub and TV board for the Kartcade front PC",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node tools/fake-rigs.js"
+  },
+  "engines": { "node": ">=18" }
+}

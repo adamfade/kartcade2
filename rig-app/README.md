@@ -12,6 +12,8 @@ valid lap. **STOP & SAVE** ends the session. Each new best lap uploads to the we
    - `RIG_ID`: a unique name per rig, e.g. `rig-03` or `motion-01`
    - `EQUIPMENT`: `rigs`, `karts` or `motion`
    - `RIG_KEY`: the same value as `RIG_KEY` in Vercel (Production)
+   - `LOCAL_URL`: the front PC's TV hub, e.g. `http://192.168.1.50:8787` (see `hub/README.md`).
+     Leave it blank if there's no TV hub.
 3. Start a session, open the app bar on the right edge of the screen, click **Kartcade**, and drag the
    window into a corner. AC remembers the spot.
 
@@ -19,6 +21,12 @@ valid lap. **STOP & SAVE** ends the session. Each new best lap uploads to the we
 
 Type the name (and email if they have a driver profile) → **START** → drive → **STOP & SAVE**.
 Invalid laps (track limits) are ignored. Works in single player and on the local LAN server.
+
+## TV board
+
+With `LOCAL_URL` set, the app also sends every lap, plus a live update each second, to the TV hub on the
+front PC. The window shows "TV linked" when the hub answers. If the front PC is off, the app keeps
+working and the website upload is unaffected. Up to 30 laps wait and are sent when the hub is back.
 
 ## First test
 

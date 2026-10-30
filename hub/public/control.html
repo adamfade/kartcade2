@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kartcade TV control</title>
+<style>
+@font-face { font-family: Outfit; src: url(/fonts/outfit.woff2) format('woff2'); font-weight: 100 900; }
+@font-face { font-family: Mono; src: url(/fonts/mono.woff2) format('woff2'); font-weight: 700; }
+:root { --bg:#0A0A0A; --card:#141414; --line:#2a2a2a; --red:#D42428; --green:#2D9E49; --dim:#8a8a8a; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: #fff; font-family: Outfit, system-ui, sans-serif; font-size: 16px; }
+.wrap { max-width: 560px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+header { display: flex; align-items: center; gap: 10px; }
+header img { height: 22px; }
+header span { color: var(--dim); font-size: 14px; margin-left: auto; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--red); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: #0d0d0d; border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.seg button { background: none; border: 0; color: var(--dim); padding: 11px 6px; border-radius: 8px; font: inherit; font-weight: 600; }
+.seg button.on { background: var(--red); color: #fff; }
+.seg.green button.on { background: var(--green); }
+label { font-size: 13px; color: var(--dim); display: grid; gap: 4px; }
+input, select { width: 100%; background: #0d0d0d; color: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 11px; font: inherit; }
+.btn { border: 0; border-radius: 10px; padding: 13px; font: inherit; font-weight: 700; color: #fff; background: var(--red); }
+.btn.alt { background: #262626; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.hint { color: var(--dim); font-size: 13px; margin: 0; }
+.list { display: grid; gap: 2px; }
+.li { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+.li:last-child { border: 0; }
+.li .t { font-family: Mono; }
+.rigs { display: flex; flex-wrap: wrap; gap: 6px; }
+.rigs span { font-size: 12px; border: 1px solid var(--green); color: var(--green); border-radius: 99px; padding: 3px 9px; }
+.err { color: var(--red); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><img src="/logo.png" alt="Kartcade"><strong>TV control</strong><span id="conn">Connecting…</span></header>
+
+  <div class="card">
+    <h2>TV shows</h2>
+    <div class="seg" id="modeSeg">
+      <button data-mode="leaderboard">Leaderboard</button>
+      <button data-mode="race">Race</button>
+    </div>
+    <p class="hint" id="modeHint"></p>
+  </div>
+
+  <div class="card" id="raceCard"></div>
+
+  <div class="card">
+    <h2>Rigs online</h2>
+    <div class="rigs" id="rigs"></div>
+  </div>
+
+  <div class="card" id="historyCard" hidden>
+    <h2>Recent races</h2>
+    <div class="list" id="history"></div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = (ms) => { if (!ms) return '-'; const m = Math.floor(ms / 60000), s = (ms % 60000) / 1000; return m + ':' + s.toFixed(3).padStart(6, '0'); };
+let state = null, combos = [], draft = { name: '', scope: 'all', combo: '' }, editing = false;
+
+async function post(action, body = {}) {
+  try {
+    const r = await fetch('/api/control/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(r.status);
+  } catch (e) { alert('Could not reach the hub (' + e.message + ')'); }
+}
+async function loadCombos() { try { combos = await (await fetch('/api/combos')).json(); } catch { combos = []; } }
+
+function scopeSeg(scope, id) {
+  return `<div class="seg green" id="${id}">
+    <button data-scope="all" class="${scope === 'all' ? 'on' : ''}">All laps</button>
+    <button data-scope="match" class="${scope === 'match' ? 'on' : ''}">This track &amp; car</button>
+  </div>
+  <p class="hint">${scope === 'match' ? 'Only laps on the race track and car count.' : 'Every valid lap since Start counts, any track or car.'}</p>`;
+}
+
+function standings(list) {
+  if (!list?.length) return '<p class="hint">No laps yet.</p>';
+  return '<div class="list">' + list.slice(0, 10).map((r, i) =>
+    `<div class="li"><span>${i + 1}</span><span>${esc(r.driver)}</span><span class="t">${fmt(r.ms)}</span></div>`).join('') + '</div>';
+}
+
+function renderRace() {
+  const race = state.race, card = $('raceCard');
+  if (!race || race.endedAt) {
+    const f = document.activeElement;   // don't wipe the form while someone is typing or picking
+    if (f && card.contains(f) && (f.tagName === 'INPUT' || f.tagName === 'SELECT')) return;
+    const opts = combos.map((c, i) => `<option value="${i}" ${draft.combo === String(i) ? 'selected' : ''}>${esc(c.track)} · ${esc(c.car)}</option>`).join('');
+    card.innerHTML = `
+      <h2>${race ? 'Last race ended' : 'Start a race'}</h2>
+      ${race ? standings(race.standings) : ''}
+      <label>Race name<input id="rName" placeholder="Friday heat 1" value="${esc(draft.name)}" maxlength="40"></label>
+      ${scopeSeg(draft.scope, 'draftScope')}
+      <label>Track and car (for “This track &amp; car”)
+        <select id="rCombo"><option value="">Set from the first lap after Start</option>${opts}</select></label>
+      <button class="btn" id="startBtn">Start race</button>
+      ${race ? '<button class="btn alt" id="clearBtn">Clear race and show leaderboard</button>' : ''}`;
+    $('rName').oninput = (e) => { draft.name = e.target.value; editing = true; };
+    $('rCombo').onchange = (e) => { draft.combo = e.target.value; };
+    $('draftScope').onclick = (e) => { const s = e.target.dataset.scope; if (s) { draft.scope = s; editing = false; renderRace(); } };
+    $('startBtn').onclick = async () => {
+      const c = combos[draft.combo];
+      await post('race/start', { name: draft.name, scope: draft.scope, trackId: c?.trackId || '', carId: c?.carId || '' });
+      draft.name = ''; editing = false;
+    };
+    if ($('clearBtn')) $('clearBtn').onclick = () => confirm('Clear the race from the TV?') && post('race/clear');
+    return;
+  }
+  const mins = Math.floor((Date.now() - race.startedAt) / 60000);
+  card.innerHTML = `
+    <h2>${esc(race.name)} · running ${mins} min</h2>
+    <p class="hint">${esc(race.track || 'Track set by first lap')} · ${esc(race.car || 'Car set by first lap')}</p>
+    ${scopeSeg(race.scope, 'liveScope')}
+    ${standings(race.standings)}
+    <div class="row2">
+      <button class="btn alt" id="newBtn">New race</button>
+      <button class="btn" id="endBtn">End race</button>
+    </div>`;
+  $('liveScope').onclick = (e) => { const s = e.target.dataset.scope; if (s) post('race/scope', { scope: s }); };
+  $('endBtn').onclick = () => confirm('End this race? Results stay on the TV.') && post('race/end');
+  $('newBtn').onclick = () => confirm('End this race and start a new one?') && post('race/end');
+}
+
+function render() {
+  for (const b of $('modeSeg').children) b.classList.toggle('on', b.dataset.mode === state.mode);
+  $('modeHint').textContent = state.mode === 'race' && !state.race ? 'Start a race below to fill the race view.' : '';
+  $('rigs').innerHTML = state.rigsOnline.length ? state.rigsOnline.map((r) => `<span>${esc(r)}</span>`).join('') : '<p class="hint">No rigs sending yet.</p>';
+  const h = state.history || [];
+  $('historyCard').hidden = !h.length;
+  $('history').innerHTML = h.map((r) => `<div class="li"><span></span><span>${esc(r.name)} · ${new Date(r.startedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span><span class="t">${r.results?.[0] ? esc(r.results[0].driver) + ' ' + fmt(r.results[0].ms) : '-'}</span></div>`).join('');
+  renderRace();
+}
+
+$('modeSeg').onclick = (e) => { const m = e.target.dataset.mode; if (m) post('mode', { mode: m }); };
+const es = new EventSource('/api/stream');
+es.onmessage = (e) => { state = JSON.parse(e.data); $('conn').textContent = 'Live'; render(); };
+es.onerror = () => { $('conn').textContent = 'Reconnecting…'; };
+loadCombos(); setInterval(loadCombos, 30000);
+</script>
+</body>
+</html>
