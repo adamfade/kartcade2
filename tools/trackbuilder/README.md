@@ -50,7 +50,8 @@ Model details:
 
 - **Physics meshes:** `1ROAD_n`, `1GRASS_L_n`, `1GRASS_R_n`, `1WALL_L`, `1WALL_R`, `1WALL_ENDA`, `1WALL_ENDB`.
 - **Spawns and gates (road):** `AC_START_0`, `AC_PIT_0`, `AC_HOTLAP_START_0`. Timing gates `AC_AB_START_L/R` and
-  `AC_AB_FINISH_L/R` sit 25 m from each end, with matching `AC_TIME_0/1_L/R` dummies.
+  `AC_AB_FINISH_L/R` sit 25 m from each end (the run is timed between them; use Practice or Hotlap), with one
+  split `AC_TIME_0_L/R` halfway. A second `AC_TIME` gate would make AC time it as a lap that never ends.
 - **Spawns and gates (circuit):** start/finish gate `AC_TIME_0_L/R` at the first point of the loop. A staggered
   grid `AC_START_0..N-1` forms up behind it (7 m rows, pole on the left; 12 slots by default, fewer if the lap is
   short). Pit boxes `AC_PIT_0..N-1` share the grid spots, since there is no pit lane. `AC_HOTLAP_START_0` is up
@@ -91,6 +92,16 @@ Model details:
 - **The road as mapped:** width and lane lines from the OSM lanes along the way (`roadinfo.ts`), sidewalks on
   urban streets, bridges levelled and built (`bridge.ts`; pick beam, arch or truss per bridge in the editor),
   side streets, signals, stop signs, crosswalks, arrows, speed signs, street lights and bus stops (`streets.ts`).
+- **Drivable surroundings (with lidar):** the ground is solid for 150 m either side of the road (`DRIVABLE_M`)
+  and in half-disc aprons past the start and the finish, shaped by the lidar and draped with the aerial photo.
+  Mapped parking lots and ground the photo shows as paved get road grip; every OSM street crossing that ground is
+  drawn as road (`streets.ts`), not just the first 45 m of side streets. Invisible boundary walls stand at its
+  edge, one-sided and facing inward (AC lets cars through two coincident faces pointing opposite ways), with a
+  second layer behind. Beyond them the terrain is solid too, and a wall rings the map's edge (`1WALL_MAP`).
+  Parked cars, hydrants and stall lines sit on the built surface (`surface.ts`), tilted to it; a car is left out
+  where the ground would rise into its body.
+- **Name a business** (Review panel): click the front wall of a unit OpenStreetMap doesn't name and type the name
+  and type; the build gives it a storefront and a sign like a mapped business (`businesses` on the build input).
 - **Lidar surface:** the USGS point cloud along the road (`lidar.ts`, decoded with laz-perf) gives real building
   heights and roof shapes, buildings OSM lacks, and every tree at its real spot and height.
 
@@ -137,12 +148,15 @@ track's real camber and dips won't show. For Mac Track, a 1 m DOGAMI LiDAR DEM w
 - **AI line:** one line along the lane, speeds from curvature. Not in the default build until a recorded line
   confirms the format. No pit lane; one pit box at the start of a road.
 - **OpenStreetMap decides the street layout:** lanes, parking, signals, signs, crossings, businesses and power lines
-  appear only where they are mapped (lidar adds unmapped buildings, trees, utility poles and street lights). Pin a
+  appear only where they are mapped (name a missing business with the Review panel's tool) (lidar adds unmapped buildings, trees, utility poles and street lights). Pin a
   review note where reality differs and fix it with the scenery tools.
 - **Detail is generated, not photographed:** facades, windows and storefronts are procedural (with the business
   names from OSM); only facades the driver photographed themselves look like the real building. Street View is a
   reference link only and is never copied into a track.
-- **Night lighting and the ground-mask grass need Custom Shaders Patch.** Without CSP the track is daytime only and
+- **Point-to-point timing:** the run is timed between the AB start and finish gates in Practice or Hotlap; Race needs
+  the AI line. Gate naming follows the AC modding community's guide and needs a rig check.
+- **Night lighting and the ground-mask grass need Custom Shaders Patch.** Lights follow CSP's `NIGHT_SMOOTH`
+  condition (from `common/conditions.ini`, which the config includes). Without CSP the track is daytime only and
   the grass is the textured ground.
 - **Size:** a 1.7 km town stretch is ~670k triangles, ~1,900 meshes and a 26 MB zip; longer routes grow roughly with
   length. The elevation fetch is capped at 64 tiles (~15-20 km of road).

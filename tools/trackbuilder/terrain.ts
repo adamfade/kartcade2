@@ -1,5 +1,5 @@
 // Visual terrain around the track, from the same elevation data, so the road doesn't float in empty sky.
-// It is visible only (no physics): cars stay inside the walls. Near the track the terrain is pushed
+// It is visible only (no physics): cars stay inside the walls (the verge and end aprons are the drivable ground). Near the track the terrain is pushed
 // below the built surface so it can never poke through the verge or the road (roads in cuttings).
 
 import type { Centerline } from './route.ts';
@@ -32,7 +32,8 @@ export function buildTerrain(cl: Centerline, g: TrackGeometry, opts: TerrainOpti
 
     // Nearest centreline sample within reach, via a coarse grid.
     const half = g.width / 2;
-    const reachMax = half + 45; // asphalt + shoulder + the widest verge
+    let reachMax = half + 45; // asphalt + shoulder + the widest verge (wide lidar verges reach further)
+    for (let i = 0; i < n; i += 5) reachMax = Math.max(reachMax, g.halfAt(i) + Math.max(g.vergeReach(i, -1), g.vergeReach(i, 1)));
     const zone = reachMax + spacing * 1.5;
     const cell = zone;
     const buckets = new Map<string, number[]>();

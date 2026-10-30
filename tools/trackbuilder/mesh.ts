@@ -57,6 +57,12 @@ export interface MeshOptions {
     urban?: ArrayLike<boolean | number>;
     /** Per sample: a parking lot or service way, paved flush to the sides (no kerb, no gravel). */
     lot?: ArrayLike<boolean | number>;
+    /**
+     * Point-to-point with lidar: half-disc aprons of drivable ground beyond the start and the finish (as wide as
+     * the verge), so the area past each end is solid too, with the boundary wall around them. Default: on with
+     * lidar on an open road.
+     */
+    aprons?: boolean;
 }
 
 /** Bridge walkway (kerb + sidewalk) width beyond the asphalt; parapets stand at its outer edge. */
@@ -142,21 +148,39 @@ function gridParts(baseName: string, material: string, rows: V3[][], uv: (i: num
 }
 
 /** Vertical wall strip, double-sided. */
-function wallPart(name: string, material: string, base: V3[], height: number): MeshPart {
+/**
+ * A barrier along a polyline. `face` is the side the drivable area is on, relative to the direction of travel
+ * along `base`: AC collides with a face from its front only, and two coincident faces pointing opposite ways let
+ * cars through, so a boundary wall faces inward, with a second layer 0.4 m behind it for fast impacts. 'both'
+ * keeps the old double-sided strip (for free-standing walls with traffic on both sides).
+ */
+export function wallPart(name: string, material: string, base: V3[], height: number, face: 'right' | 'left' | 'both' = 'both'): MeshPart {
     const p: MeshPart = { name, material, positions: [], normals: [], uvs: [], tangents: [], indices: [] };
-    let s = 0;
-    for (let i = 0; i < base.length; i++) {
-        if (i > 0) s += Math.hypot(base[i][0] - base[i - 1][0], base[i][2] - base[i - 1][2]);
-        const t = i < base.length - 1 ? norm(sub(base[i + 1], base[i])) : norm(sub(base[i], base[i - 1]));
-        const n = norm([t[2], 0, -t[0]]);
-        p.positions.push(...base[i], base[i][0], base[i][1] + height, base[i][2]);
-        p.normals.push(...n, ...n);
-        p.uvs.push(s / 4, 0, s / 4, height / 4);
-        p.tangents.push(...t, ...t);
-    }
-    for (let i = 0; i < base.length - 1; i++) {
-        const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
-        p.indices.push(a, b, c, c, b, d, a, c, b, c, d, b);
+    const layers = face === 'both' ? [0] : [0, 0.4];
+    for (const back of layers) {
+        const v0 = p.positions.length / 3;
+        let s = 0;
+        for (let i = 0; i < base.length; i++) {
+            if (i > 0) s += Math.hypot(base[i][0] - base[i - 1][0], base[i][2] - base[i - 1][2]);
+            // Tangent from the neighbours (a corner's offset follows the bisector).
+            const a = base[Math.max(0, i - 1)], c = base[Math.min(base.length - 1, i + 1)];
+            const t = norm([c[0] - a[0], 0, c[2] - a[2]]);
+            const right: V3 = [t[2], 0, -t[0]]; // right of travel
+            const inward: V3 = face === 'left' ? [-right[0], 0, -right[2]] : right;
+            const q: V3 = [base[i][0] - inward[0] * back, base[i][1], base[i][2] - inward[2] * back];
+            p.positions.push(...q, q[0], q[1] + height, q[2]);
+            const nn = face === 'both' ? right : inward;
+            p.normals.push(...nn, ...nn);
+            p.uvs.push(s / 4, 0, s / 4, height / 4);
+            p.tangents.push(...t, ...t);
+        }
+        for (let i = 0; i < base.length - 1; i++) {
+            const a = v0 + i * 2, b = a + 1, c = a + 2, d = a + 3;
+            // (a, b, c) faces right of travel: cross(b - a, c - a) = height * (t.z, 0, -t.x).
+            if (face === 'right') p.indices.push(a, b, c, c, b, d);
+            else if (face === 'left') p.indices.push(a, c, b, c, d, b);
+            else p.indices.push(a, b, c, c, b, d, a, c, b, c, d, b);
+        }
     }
     return p;
 }
@@ -251,7 +275,9 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
     // Grass both sides: from the road edge outward, blending into the ground.
     // prof[0] = left, prof[1] = right: offsets beyond the asphalt edge and their heights, per row.
     const prof: { offs: number[]; ys: number[] }[][] = [new Array(n), new Array(n)];
-    const steps = opts.lidar ? [0, 0, 0.8, 1.8, 3, 5, 8, 12, 18, 26, 36] : [0, 0, 3, 10, 22];
+    // Wide lidar verges (the drivable surroundings) get more columns further out, at most ~24 m apart.
+    const far = opts.lidar ? [48, 62, 78, 96, 116, 138, 162, 188].filter((d) => d < verge - 6) : [];
+    const steps = opts.lidar ? [0, 0, 0.8, 1.8, 3, 5, 8, 12, 18, 26, 36, ...far] : [0, 0, 3, 10, 22];
     const lotRow = (i: number) => !!opts.lot?.[i];
     const urbanRow = (i: number) => !!opts.urban?.[i] && !lotRow(i);
     /** Shoulder kind per row: 0 gravel (rural), 1 sidewalk (urban), 2 paved lot. */
@@ -297,6 +323,17 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         return side === -1 ? pts.reverse() : pts; // columns left -> right
     };
     const Lr = Array.from({ length: n }, (_, i) => sideRow(i, -1)), Rr = Array.from({ length: n }, (_, i) => sideRow(i, 1));
+    // Built surface height at any lateral offset: asphalt, then the shoulder and verge profile.
+    const surfaceAt = (i: number, lat: number) => {
+        const half = hw(i);
+        if (Math.abs(lat) <= half) return surf(i, lat);
+        const p = prof[lat < 0 ? 0 : 1][i], d = Math.abs(lat) - half;
+        for (let k = 1; k < p.offs.length; k++) if (d <= p.offs[k]) {
+            const t = (d - p.offs[k - 1]) / (p.offs[k] - p.offs[k - 1] || 1);
+            return p.ys[k - 1] + (p.ys[k] - p.ys[k - 1]) * t;
+        }
+        return p.ys[p.ys.length - 1];
+    };
     const L = Array.from({ length: rowCount }, (_, i) => Lr[ix(i)]), R = Array.from({ length: rowCount }, (_, i) => Rr[ix(i)]);
     // Columns: L rows run outer edge -> asphalt edge (k = 5..0), R rows asphalt edge -> outer edge (k = 0..5).
     // The first strip (asphalt edge to edge + shoulder) is the gravel shoulder; the rest is the grass verge.
@@ -371,19 +408,77 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         parts.push(...gridParts(`1GRASS_R${sfx}`, 'verge', sl(Rv), worldUv(sl(Rv)), (i) => tangent3(row(i))));
     });
 
+    // Aprons: half discs of ground past each end of an open road, lidar-shaped, meeting the end row exactly.
+    const aprons = !closed && !!opts.ground && (opts.aprons ?? !!opts.lidar);
+    const apronRims: V3[][] = [];
+    if (aprons) {
+        const A = 24;
+        const arcFrom = (i: number, j: number) => Math.abs(cl.s[j] - cl.s[i]);
+        for (const [end, sign, tag] of [[0, -1, 'A'], [n - 1, 1, 'B']] as const) {
+            const i = end, t = cl.tangents[i], back = { x: t.x * sign, y: t.y * sign }, r = right(i), C = cl.points[i], h = hw(i);
+            const pl = prof[0][i].offs, pr = prof[1][i].offs;
+            const radL = [0, h / 2, ...pl.map((o) => h + o)], radR = [0, h / 2, ...pr.map((o) => h + o)];
+            // Other parts of the road nearby: the apron stops short of their verges.
+            const blocked = (x: number, z: number) => {
+                for (let j = 0; j < n; j += 2) {
+                    if (arcFrom(i, j) < 80) continue;
+                    const d = Math.hypot(x - cl.points[j].x, z - cl.points[j].y);
+                    if (d > hw(j) + shoulder + verge + 2) continue;
+                    const tt = cl.tangents[j], lat = (x - cl.points[j].x) * tt.y - (z - cl.points[j].y) * tt.x;
+                    const side = lat < 0 ? 0 : 1, o = prof[side][j].offs;
+                    if (Math.abs(lat) < hw(j) + o[o.length - 1] + 1) return true;
+                }
+                return false;
+            };
+            const rows: V3[][] = [];
+            for (let a = 0; a <= A; a++) {
+                const phi = -Math.PI / 2 + (Math.PI * a) / A, u = a / A, cs = Math.cos(phi), sn = Math.sin(phi);
+                const dir = { x: back.x * cs + r.x * sn, y: back.y * cs + r.y * sn };
+                const row: V3[] = [];
+                let stop = Infinity;
+                for (let k = 0; k < radL.length; k++) {
+                    let rad = radL[k] * (1 - u) + radR[k] * u;
+                    const seam = a === 0 || a === A;
+                    if (!seam && k > 2 && blocked(C.x + dir.x * rad, C.y + dir.y * rad)) stop = Math.min(stop, row.length ? Math.hypot(row[row.length - 1][0] - C.x, row[row.length - 1][2] - C.y) : 0);
+                    rad = Math.min(rad, stop);
+                    const x = C.x + dir.x * rad, z = C.y + dir.y * rad;
+                    const lat = rad * sn, fwd = Math.max(0, rad * cs);
+                    const base = surfaceAt(i, lat);
+                    const gy = opts.ground!(x, z);
+                    // On the end row (fwd 0) exactly the built surface; beyond it, eased onto the real ground.
+                    const y = gy != null && Number.isFinite(gy) ? base + (gy - base) * smoothstep(fwd / 6) : base;
+                    row.push([x, y, z]);
+                }
+                rows.push(row);
+            }
+            parts.push(...gridParts(`1GRASS_APRON_${tag}`, 'verge', rows, worldUv(rows), () => [r.x, 0, r.y]));
+            apronRims.push(rows.map((row) => row[row.length - 1]));
+        }
+    }
+
     // Road markings: thin painted strips 12 mm above the asphalt, following its crown and banking.
     parts.push(...markingParts(cl, opts.markings ?? (closed ? { centre: 'none', edges: true } : { centre: 'double-solid', edges: true }), hw, surf, at, opts.lanes));
 
     if (opts.walls ?? true) {
         const h = opts.wallHeight ?? 2.5;
-        const wl = wallPart('1WALL_L', 'wall', L.map((r) => r[0]), h), wr = wallPart('1WALL_R', 'wall', R.map((r) => r[r.length - 1]), h);
+        // Left wall: the road is to its right going along the route; right wall: to its left.
+        const wl = wallPart('1WALL_L', 'wall', L.map((r) => r[0]), h, 'right'), wr = wallPart('1WALL_R', 'wall', R.map((r) => r[r.length - 1]), h, 'left');
         if (opts.lidar) { wl.visible = wr.visible = false; wl.castShadows = wr.castShadows = false; }
         parts.push(wl, wr);
-        if (!closed) {
+        if (!closed && apronRims.length) {
+            // Round the aprons' outer edges (they meet the side walls at the end rows).
+            apronRims.forEach((rim, k) => {
+                // Rims run left -> right round the back of each end: the apron is to the left at the start, to the
+                // right at the finish.
+                const w = wallPart(`1WALL_END${k === 0 ? 'A' : 'B'}`, 'wall', rim, h, k === 0 ? 'left' : 'right');
+                if (opts.lidar) { w.visible = false; w.castShadows = false; }
+                parts.push(w);
+            });
+        } else if (!closed) {
             // Cap the two ends so cars can't drive off the start or the finish.
             const capAt = (i: number, flip: boolean) => {
                 const row = [...L[i], ...R[i]];
-                return wallPart(`1WALL_END${flip ? 'B' : 'A'}`, 'wall', row, h);
+                return wallPart(`1WALL_END${flip ? 'B' : 'A'}`, 'wall', row, h, flip ? 'right' : 'left');
             };
             const ca = capAt(0, false), cb = capAt(n - 1, true);
             if (opts.lidar) { ca.visible = cb.visible = false; ca.castShadows = cb.castShadows = false; }
@@ -402,31 +497,23 @@ export function buildGeometry(cl: Centerline, heights: number[], opts: MeshOptio
         const hotI = idxAt(Math.min(4, cl.length * 0.01));
         const lineA = idxAt(Math.min(25, cl.length * 0.1));
         const lineB = idxAt(Math.max(cl.length - 25, cl.length * 0.9));
+        const split = idxAt(cl.length / 2);
+        // Gate posts stand beyond the paved edge (shoulder or sidewalk included) so any line across the road counts.
+        const post = (i: number) => hw(i) + shoulder + 2;
         return [
             { name: 'AC_START_0', position: on(startI, 0, 0.1), forward: fwd(startI, flip) },
             { name: 'AC_PIT_0', position: on(pitI, 0, 0.1), forward: fwd(pitI, flip) },
             { name: 'AC_HOTLAP_START_0', position: on(hotI, 0, 0.1), forward: fwd(hotI, flip) },
-            { name: 'AC_TIME_0_L', position: on(lineA, -hw(lineA) - 1, 1), forward: fwd(lineA) },
-            { name: 'AC_TIME_0_R', position: on(lineA, hw(lineA) + 1, 1), forward: fwd(lineA) },
-            { name: 'AC_TIME_1_L', position: on(lineB, -hw(lineB) - 1, 1), forward: fwd(lineB) },
-            { name: 'AC_TIME_1_R', position: on(lineB, hw(lineB) + 1, 1), forward: fwd(lineB) },
-            // Point-to-point (A to B) timing reads these gates.
-            { name: 'AC_AB_START_L', position: on(lineA, -hw(lineA) - 1, 1), forward: fwd(lineA) },
-            { name: 'AC_AB_START_R', position: on(lineA, hw(lineA) + 1, 1), forward: fwd(lineA) },
-            { name: 'AC_AB_FINISH_L', position: on(lineB, -hw(lineB) - 1, 1), forward: fwd(lineB) },
-            { name: 'AC_AB_FINISH_R', position: on(lineB, hw(lineB) + 1, 1), forward: fwd(lineB) },
+            // Point-to-point (A to B): the run is timed from the AB start gate to the AB finish gate. AC_TIME_0 is the
+            // one optional split, halfway (a second AC_TIME gate makes AC treat the road as a lap that never closes).
+            { name: 'AC_AB_START_L', position: on(lineA, -post(lineA), 1), forward: fwd(lineA) },
+            { name: 'AC_AB_START_R', position: on(lineA, post(lineA), 1), forward: fwd(lineA) },
+            { name: 'AC_AB_FINISH_L', position: on(lineB, -post(lineB), 1), forward: fwd(lineB) },
+            { name: 'AC_AB_FINISH_R', position: on(lineB, post(lineB), 1), forward: fwd(lineB) },
+            { name: 'AC_TIME_0_L', position: on(split, -post(split), 1), forward: fwd(split) },
+            { name: 'AC_TIME_0_R', position: on(split, post(split), 1), forward: fwd(split) },
         ];
     })();
-    const surfaceAt = (i: number, lat: number) => {
-        const half = hw(i);
-        if (Math.abs(lat) <= half) return surf(i, lat);
-        const p = prof[lat < 0 ? 0 : 1][i], d = Math.abs(lat) - half;
-        for (let k = 1; k < p.offs.length; k++) if (d <= p.offs[k]) {
-            const t = (d - p.offs[k - 1]) / (p.offs[k] - p.offs[k - 1] || 1);
-            return p.ys[k - 1] + (p.ys[k] - p.ys[k - 1]) * t;
-        }
-        return p.ys[p.ys.length - 1];
-    };
     const vergeReach = (i: number, side: -1 | 1) => { const o = prof[side === -1 ? 0 : 1][i].offs; return o[o.length - 1]; };
     return { parts, dummies, roadHeightAt: surf, surfaceAt, vergeReach, width: maxHalf * 2, halfAt: hw, onBridge: (i: number) => bridgeRow[i] === 1 };
 }

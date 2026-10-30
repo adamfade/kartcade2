@@ -23,7 +23,7 @@ import type { Rgba } from './dds.ts';
 type P2 = { x: number; y: number };
 type Ground = (x: number, z: number) => number | null;
 
-export interface StreetStats { stubs: number; signals: number; stopSigns: number; crosswalks: number; arrows: number; speedSigns: number; lamps: number; busStops: number }
+export interface StreetStats { stubs: number; /** Other nearby streets drawn across the drivable ground. */ streets?: number; signals: number; stopSigns: number; crosswalks: number; arrows: number; speedSigns: number; lamps: number; busStops: number }
 export interface StreetBuild { parts: MeshPart[]; stats: StreetStats; /** Side-street footprints (for keeping trees and buildings off them). */ stubs: { pts: P2[]; half: number }[]; /** Crosswalks across the route (distance along it). */ crossS: number[]; /** Street-lamp lens centres (for night lights). */ lamps: V3[] }
 
 interface Branch {
@@ -77,6 +77,11 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
         return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
     };
     const fwdAt = (sM: number): V3 => { const t = cl.tangents[idxAt(sM)]; return [t.x, 0, t.y]; };
+    /** Inside the drivable ground beside the route (the verge or lot), clear of its boundary wall. */
+    const inBand = (p: P2, pad = 3) => {
+        const q = nearest(p, 240);
+        return q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + g.vergeReach(q.i, q.lat < 0 ? -1 : 1) - pad;
+    };
 
     // ---------------------------------------------------------------- materials and meshes
     const flat = (name: string, rgb: [number, number, number], emissive?: [number, number, number], spec = 0.1) => {
@@ -136,7 +141,8 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
                 const raw: P2[] = [pts[j]], ids = [way.nodes[j]];
                 for (let m = k; m >= 0 && m < pts.length && !on[m]; m += dir) { raw.push(pts[m]); ids.push(way.nodes[m]); }
                 const service = way.tags.highway === 'service';
-                const maxL = service ? (way.tags.service === 'driveway' ? 8 : 18) : 45;
+                // Streets run on to the edge of the drivable ground; lot aisles and alleys a little way in.
+                const maxL = service ? (way.tags.service === 'driveway' ? 8 : way.tags.service === 'parking_aisle' ? 120 : 60) : 400;
                 // Resample every 2 m up to maxL; remember where each node lands.
                 const nodeT: number[] = [0];
                 for (let q = 1; q < raw.length; q++) nodeT.push(nodeT[q - 1] + Math.hypot(raw[q].x - raw[q - 1].x, raw[q].y - raw[q - 1].y));
@@ -147,8 +153,11 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
                     const seg = nodeT[q + 1] - nodeT[q] || 1, u = Math.max(0, Math.min(1, (t - nodeT[q]) / seg));
                     out.push({ x: raw[q].x + (raw[q + 1].x - raw[q].x) * u, y: raw[q].y + (raw[q + 1].y - raw[q].y) * u });
                 }
+                // Stop short of the boundary wall.
+                const cut = out.findIndex((p, q) => q > 2 && !inBand(p));
+                if (cut > 0) out.length = cut;
                 if (out.length < 3) continue;
-                const end = nearest(out[out.length - 1], 80);
+                const end = nearest(out[Math.min(out.length - 1, 20)], 80);
                 const jn = near[j];
                 if (end.i >= 0 && end.d < g.halfAt(jn.i) + 3) continue; // runs alongside the route (slip lane, dual carriageway)
                 const ls = laneSet(way.tags, dir === 1 ? 1 : -1);
@@ -211,6 +220,56 @@ export function buildStreets(cl: Centerline, g: TrackGeometry, road: RoadInfo, o
         });
         stats.stubs++;
     }
+    // ---------------------------------------------------------------- the rest of the street network nearby
+    // Streets that never meet the route (parallel streets, cross streets beyond a side street, lot aisles) are drawn
+    // where they cross the drivable ground, as solid road. Each class sits a few millimetres above the next lower one
+    // so crossings don't flicker.
+    const branchWays = new Set(branches.map((br) => br.b.way.id));
+    let others = 0;
+    for (const way of roads) {
+        if (routeWays.has(way.id) || branchWays.has(way.id)) continue;
+        const t = way.tags;
+        if (t.tunnel && t.tunnel !== 'no' || t.bridge && t.bridge !== 'no' || parseFloat(t.layer ?? '0') < 0 || t.area === 'yes') continue;
+        const raw = way.line.map(L);
+        if (raw.length < 2) continue;
+        const ls = laneSet(t, 1), service = t.highway === 'service';
+        const half = Math.min(9, wayWidth(t, ls) / 2) * (service ? 0.8 : 1);
+        const lift = 0.03 + 0.004 * rankOf(t);
+        // Resample every 2 m.
+        const pts: P2[] = [];
+        for (let q = 0; q < raw.length - 1; q++) {
+            const a = raw[q], b = raw[q + 1], l = Math.hypot(b.x - a.x, b.y - a.y), k = Math.max(1, Math.ceil(l / 2));
+            for (let m = 0; m < k; m++) pts.push({ x: a.x + ((b.x - a.x) * m) / k, y: a.y + ((b.y - a.y) * m) / k });
+        }
+        pts.push(raw[raw.length - 1]);
+        const ok = pts.map((p) => { if (!inBand(p, 3 + half)) return false; const q = nearest(p); return !(q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + half + 1); });
+        for (let a = 0; a < pts.length;) {
+            if (!ok[a]) { a++; continue; }
+            let b = a; while (b + 1 < pts.length && ok[b + 1]) b++;
+            if (b - a >= 2) {
+                const run = pts.slice(a, b + 1);
+                const tan = (k: number): P2 => { const u = run[Math.max(0, k - 1)], w = run[Math.min(run.length - 1, k + 1)]; const l = Math.hypot(w.x - u.x, w.y - u.y) || 1; return { x: (w.x - u.x) / l, y: (w.y - u.y) / l }; };
+                const hAt = (p: P2) => {
+                    const q = nearest(p, 240);
+                    let gy = ground(p.x, p.y) ?? (q.i >= 0 ? g.surfaceAt(q.i, q.lat) : 0);
+                    if (q.i >= 0 && Math.abs(q.lat) <= g.halfAt(q.i) + g.vergeReach(q.i, q.lat < 0 ? -1 : 1)) gy = Math.max(gy, g.surfaceAt(q.i, q.lat));
+                    return gy + lift;
+                };
+                const rows = run.map((c, k) => { const tt = tan(k), r = { x: tt.y, y: -tt.x }; return [-1, -0.5, 0, 0.5, 1].map((f) => { const p = { x: c.x + r.x * f * half, y: c.y + r.y * f * half }; return [p.x, hAt(p), p.y] as V3; }); });
+                const m = mesh('1ROAD_SIDE', sideRoadM);
+                for (let k = 0; k < rows.length - 1; k++) for (let c = 0; c < 4; c++) {
+                    const qd = [rows[k][c], rows[k][c + 1], rows[k + 1][c + 1], rows[k + 1][c]];
+                    const uv = (row: number, col: number): [number, number] => [0.5 + ((col - 2) / 2) * half / 48, ((a + row) * 2) / 48];
+                    m.face(qd, [0, 1, 0], [uv(k, c), uv(k, c + 1), uv(k + 1, c + 1), uv(k + 1, c)]);
+                }
+                stubFootprints.push({ pts: run, half });
+                others++;
+            }
+            a = b + 1;
+        }
+    }
+    stats.streets = others;
+
     /** Point on a stub at distance t from the junction and lateral v (right of the outward direction). */
     const stubPt = (b: Branch, t: number, v: number, up = 0): V3 => { const p = stubSurface.get(b)!(t, v); return [p[0], p[1] + up, p[2]]; };
     const stubDir = (b: Branch, t: number): P2 => { const k = Math.max(1, Math.min(b.pts.length - 1, Math.round(t / 2))); const a = b.pts[k - 1], c = b.pts[k]; const l = Math.hypot(c.x - a.x, c.y - a.y) || 1; return { x: (c.x - a.x) / l, y: (c.y - a.y) / l }; };

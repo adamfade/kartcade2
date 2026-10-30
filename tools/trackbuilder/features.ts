@@ -492,7 +492,7 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
         for (let k0 = 0; k0 < W * Hh; k0++) {
             if (!mask[k0] || seen[k0]) continue;
             const comp: number[] = [], stack = [k0]; seen[k0] = 1;
-            while (stack.length && comp.length < 6000) {
+            while (stack.length && comp.length < 80000) {
                 const k = stack.pop()!; comp.push(k);
                 const x = k % W, y = Math.floor(k / W);
                 for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -501,8 +501,41 @@ export function buildFeatures(cl: Centerline, g: TrackGeometry, osm: OsmFeatures
                 }
             }
             const area = comp.length * pxArea;
-            if (area < 22 || area > 2500) continue;
+            if (area < 22 || area > 60000) continue;
             const pts = comp.map((k) => proj.toLocal(llOf(k)));
+            if (area > 2500) {
+                // A big blob is a block of joined buildings (a downtown row, a mill): split it into ~20 m pieces
+                // along its long axis, each as tall as the lidar says, skipping pieces on mapped buildings or roads.
+                const o = obb(pts), ax = o.ax, ay = { x: -ax.y, y: ax.x }, T = 20;
+                const nu = Math.max(1, Math.round(o.w / T)), nv = Math.max(1, Math.round(o.d / T)), tu = o.w / nu, tv = o.d / nv;
+                const tiles = new Map<number, number[]>();
+                comp.forEach((k, q) => {
+                    const p = pts[q], du = (p.x - o.c.x) * ax.x + (p.y - o.c.y) * ax.y, dv = (p.x - o.c.x) * ay.x + (p.y - o.c.y) * ay.y;
+                    const iu = Math.min(nu - 1, Math.max(0, Math.floor((du + o.w / 2) / tu))), iv = Math.min(nv - 1, Math.max(0, Math.floor((dv + o.d / 2) / tv)));
+                    const key = iu * 1000 + iv; let t = tiles.get(key); if (!t) tiles.set(key, (t = [])); t.push(q);
+                });
+                for (const [key, qs] of tiles) {
+                    if (qs.length * pxArea < 0.55 * tu * tv) continue;
+                    const iu = Math.floor(key / 1000), iv = key % 1000;
+                    // The piece's extent: its pixels' range within the tile.
+                    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+                    for (const q of qs) { const p = pts[q], du = (p.x - o.c.x) * ax.x + (p.y - o.c.y) * ax.y, dv = (p.x - o.c.x) * ay.x + (p.y - o.c.y) * ay.y; u0 = Math.min(u0, du); u1 = Math.max(u1, du); v0 = Math.min(v0, dv); v1 = Math.max(v1, dv); }
+                    // Inner edges meet the neighbouring piece exactly (no gaps between joined buildings).
+                    const lo = (i: number, n: number, t: number, w: number, m: number) => (i > 0 ? -w / 2 + i * t : m - 0.4);
+                    const hi = (i: number, n: number, t: number, w: number, m: number) => (i < n - 1 ? -w / 2 + (i + 1) * t : m + 0.4);
+                    const ua = lo(iu, nu, tu, o.w, u0), ub = hi(iu, nu, tu, o.w, u1), va = lo(iv, nv, tv, o.d, v0), vb = hi(iv, nv, tv, o.d, v1);
+                    if (ub - ua < 3 || vb - va < 3) continue;
+                    const cu = (ua + ub) / 2, cv = (va + vb) / 2, cx = o.c.x + ax.x * cu + ay.x * cv, cy = o.c.y + ax.y * cu + ay.y * cv;
+                    if (onBuilding({ x: cx, y: cy }) || clearOfRoads({ x: cx, y: cy }) < 3) continue;
+                    const ring = [[ua, va], [ub, va], [ub, vb], [ua, vb]].map(([u, v]) => ({ x: o.c.x + ax.x * u + ay.x * v, y: o.c.y + ax.y * u + ay.y * v }));
+                    if (Math.min(...ring.map((p) => clearOfRoads(p))) < 1) continue;
+                    const m = measure(qs.map((q) => s.above[comp[q]]).sort((a, b) => a - b));
+                    if (!m) continue;
+                    addBuilding(ring, { building: 'commercial' }, Math.round(cx * 7 + cy * 13), m);
+                    stats.lidarBuildings!++;
+                }
+                continue;
+            }
             const ctr = pts.reduce((a, p) => ({ x: a.x + p.x / pts.length, y: a.y + p.y / pts.length }), { x: 0, y: 0 });
             if (onBuilding(ctr) || clearOfRoads(ctr) < 3) continue;
             const o = obb(pts);

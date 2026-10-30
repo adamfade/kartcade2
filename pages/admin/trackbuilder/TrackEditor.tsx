@@ -31,8 +31,8 @@ import StreetViewPane from './StreetViewPane';
 import DriveVideoPane from './DriveVideoPane';
 import type { SavedDrive } from './DriveVideoPane';
 import SceneryPanel from './SceneryPanel';
-import ReviewPanel, { dataUrlToRgba, photoToDataUrl } from './ReviewPanel';
-import type { FacadePhoto, ReviewNote, ReviewTool } from './ReviewPanel';
+import ReviewPanel, { BUSINESS_KINDS, dataUrlToRgba, photoToDataUrl } from './ReviewPanel';
+import type { FacadePhoto, NamedBusiness, ReviewNote, ReviewTool } from './ReviewPanel';
 import type { Tool, ToolOptions } from './SceneryPanel';
 
 type Mode = 'start' | 'via' | 'end';
@@ -147,11 +147,15 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     const setDrive = (d: SavedDrive | null) => { setDriveRaw(d); touch(); };
     /** A straightened frame from the drive video, waiting for its wall to be clicked. */
     const [frameForFacade, setFrameForFacade] = useState<string | null>(null);
+    // Businesses OSM lacks, named on their buildings.
+    const [businesses, setBusinessesRaw] = useState<NamedBusiness[]>(initial.businesses ?? []);
+    const setBusinesses = (b: NamedBusiness[]) => { setBusinessesRaw(b); touch(); };
+    const [pendingBusiness, setPendingBusiness] = useState<Omit<NamedBusiness, 'id' | 'name' | 'kind'> | null>(null);
     useEffect(() => { if (compare !== 'drive') follow.current = null; }, [compare]);
     const photoRgba = useRef(new Map<string, { width: number; height: number; data: Uint8Array }>());
     const setNotes = (n: ReviewNote[]) => { setNotesRaw(n); touch(); };
     const setPhotos = (p: FacadePhoto[]) => { setPhotosRaw(p); touch(); };
-    const setReviewTool = (t: ReviewTool | null) => { setReviewToolRaw(t); setPendingPhoto(null); if (t !== 'photo') setFrameForFacade(null); if (t) { setToolRaw(null); setPendingFrom(null); } };
+    const setReviewTool = (t: ReviewTool | null) => { setReviewToolRaw(t); setPendingPhoto(null); setPendingBusiness(null); if (t !== 'photo') setFrameForFacade(null); if (t) { setToolRaw(null); setPendingFrom(null); } };
 
     const pins = useMemo(() => (start && end ? [start, ...vias, end] : null), [start, vias, end]);
     const net: NetOptions = useMemo(() => ({ fetch: politeFetch, log: (m) => setLog((l) => [...l, m]) }), []);
@@ -320,6 +324,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
         city: kind === 'circuit' ? 'Oregon' : 'West Linn', elements: withElements ? elements : elements.filter((e) => e.type === 'lines'),
         library: library.current ?? undefined, site: realGround ? siteRef.current?.site : undefined, bridgeStyles,
         facadePhotos: photos.flatMap((ph) => { const image = photoRgba.current.get(ph.id); return image ? [{ at: ph.at, image }] : []; }),
+        businesses: businesses.map((b) => ({ at: b.at, name: b.name, tags: BUSINESS_KINDS[b.kind]?.tags })),
     });
     /** The preview (geometry and materials only) builds in the worker too, so long roads never freeze the page. */
     const previewBuild = async (polyline: LatLon[]) => {
@@ -339,7 +344,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     // Rebuild the base when options that change its shape change (keeps the preview honest).
     // Centre-line stretches change the road markings, which are part of the base geometry.
     const linesKey = JSON.stringify(elements.filter((e) => e.type === 'lines'));
-    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}|${JSON.stringify(bridgeStyles)}|${photos.map((p) => p.id).join(',')}`;
+    const optsKey = `${width}|${walls}|${flip}|${reverse}|${gridSlots}|${linesKey}|${realGround}|${JSON.stringify(bridgeStyles)}|${photos.map((p) => p.id).join(',')}|${JSON.stringify(businesses.map((b) => [b.name, b.kind, b.at]))}`;
     const lastOpts = useRef(optsKey);
     useEffect(() => {
         if (lastOpts.current === optsKey) return;
@@ -379,7 +384,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                 id: projectId, name: name.trim() || 'Untitled track', kind,
                 pins: pins ?? [], loop, line, width: parseFloat(width) || null, walls, flipStart: flip, reverse,
                 gridSlots: parseInt(gridSlots, 10) || 12, elements, source: loopSource || undefined, siteId, realGround, bridgeStyles,
-                reviewNotes: notes, facadePhotos: photos, drive,
+                reviewNotes: notes, facadePhotos: photos, drive, businesses,
                 stats: base ? { lengthM: base.stats.lengthM, climbM: base.stats.climbM } : (initial.stats ?? null),
             }, currentUser?.email);
             if (!projectId) { setProjectId(id); navigate(`/admin/track-builder?id=${id}`, { replace: true }); }
@@ -390,6 +395,10 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
     // ---- scenery placement from 3D picks
     const onPick = (p: TrackPick) => {
         if (reviewTool && base) {
+            if (reviewTool === 'business') {
+                setPendingBusiness({ s: p.s, point: p.point, at: base.centerline.projection.toLatLon({ x: p.point.x, y: p.point.z }) });
+                return;
+            }
             if (reviewTool === 'note') {
                 const id = elementId();
                 setNotes([...notes, { id, s: p.s, point: p.point, text: '' }]);
@@ -584,8 +593,8 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                                     onFacadeFrame={(d) => { setReviewTool('photo'); setFrameForFacade(d); }}
                                     className="h-[420px] md:h-[600px] rounded-xl overflow-hidden border border-white/10" />
                             )}
-                            <TrackPreview3D build={base} scenery={scenery} picking={!!tool || (!!reviewTool && !pendingPhoto)} marker={pendingFrom} onPick={onPick} goTo={goTo}
-                                pins={[...notes.map((n) => ({ id: n.id, point: n.point, done: n.done, active: n.id === activeNote })), ...photos.map((ph) => ({ id: ph.id, point: ph.point, done: true })), ...(pendingPhoto ? [{ id: 'pending', point: pendingPhoto.point, active: true }] : [])]}
+                            <TrackPreview3D build={base} scenery={scenery} picking={!!tool || (!!reviewTool && !pendingPhoto && !pendingBusiness)} marker={pendingFrom} onPick={onPick} goTo={goTo}
+                                pins={[...notes.map((n) => ({ id: n.id, point: n.point, done: n.done, active: n.id === activeNote })), ...photos.map((ph) => ({ id: ph.id, point: ph.point, done: true })), ...businesses.map((b) => ({ id: b.id, point: b.point, done: true })), ...(pendingBusiness ? [{ id: 'pending-biz', point: pendingBusiness.point, active: true }] : []), ...(pendingPhoto ? [{ id: 'pending', point: pendingPhoto.point, active: true }] : [])]}
                                 follow={compare === 'drive' ? follow : undefined} onViewChange={compare === 'off' ? undefined : setViewInfo}
                                 className="h-[600px] rounded-xl overflow-hidden border border-white/10 bg-black" />
                         </div>
@@ -598,6 +607,7 @@ const TrackEditor: React.FC<{ initial: TrackProject }> = ({ initial }) => {
                     <ReviewPanel tool={reviewTool} setTool={setReviewTool} notes={notes} setNotes={setNotes} photos={photos} setPhotos={setPhotos}
                         pendingPhoto={pendingPhoto} cancelPhoto={() => { setPendingPhoto(null); setFrameForFacade(null); }} activeId={activeNote} setActiveId={setActiveNote}
                         pendingFrame={frameForFacade}
+                        businesses={businesses} setBusinesses={setBusinesses} pendingBusiness={pendingBusiness} cancelBusiness={() => setPendingBusiness(null)}
                         onPhotoChosen={async (f) => {
                             if (!pendingPhoto) return;
                             try {

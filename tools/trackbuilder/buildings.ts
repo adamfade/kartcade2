@@ -168,7 +168,14 @@ export function shopSignImage(name: string, style: number): Rgba {
     const fg: [number, number, number] = style % 4 === 1 ? [40, 36, 30] : [240, 232, 210];
     const im = img(512, 128, [...bg, 255]);
     rect(im, 0, 0, 512, 6, () => [200, 190, 160]); rect(im, 0, 122, 512, 128, () => [200, 190, 160]);
-    if (name) drawText(im, name.toUpperCase(), { x: 20, y: 22, w: 472, h: 84 }, fg);
+    const text = name.toUpperCase().trim();
+    if (text.length > 22 && text.includes(' ')) {
+        // Long names on two lines, broken at the space nearest the middle.
+        const spaces = [...text.matchAll(/ /g)].map((m) => m.index!);
+        const at = spaces.reduce((b, k) => (Math.abs(k - text.length / 2) < Math.abs(b - text.length / 2) ? k : b), spaces[0]);
+        drawText(im, text.slice(0, at), { x: 20, y: 16, w: 472, h: 46 }, fg);
+        drawText(im, text.slice(at + 1), { x: 20, y: 66, w: 472, h: 46 }, fg);
+    } else if (text) drawText(im, text, { x: 20, y: 22, w: 472, h: 84 }, fg);
     return im;
 }
 
@@ -423,7 +430,7 @@ export class BuildingKit {
             for (let u = u0 + 2.4; u < u1 - 0.5; u += 2.4) if (u < ud - 0.2 || u > ud + 1.2) this.slab(dark, w, u - 0.05, u + 0.05, gl0, gl1, 0, 0.08, false);
             this.slab(dark, w, u0, u1, gl1, gl1 + 0.15, 0, 0.12);
             // Sign band with the business name.
-            const name = (s.tags.name ?? s.tags.brand ?? typeLabel(s.tags)).replace(/:/g, ' ').slice(0, 28);
+            const name = (s.tags.name ?? s.tags.brand ?? typeLabel(s.tags)).replace(/:/g, ' ').slice(0, 44);
             const style = Math.floor(r() * 4);
             const sign = this.meshFor('BLDD', w.a, this.mat(`sign:${style}:${name}`));
             const sw = Math.min(u1 - u0 - 0.2, Math.max(2.4, name.length * 0.28));

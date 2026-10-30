@@ -31,6 +31,8 @@ export interface RoadsideOptions {
     fronts?: HouseFront[];
     /** Lots fill this share of their stalls, and parking lanes this share of their spaces (0..1). */
     occupancy?: number;
+    /** Height of the built ground (road, verge, lots, streets) at a point, for seating things on it. */
+    surface?: (x: number, z: number) => number | null;
 }
 
 export interface RoadsideStats { stallLines: number; lamps: number; poles: number; lidarPoles: number; wires: number; hydrants: number; mailboxes: number; parkedCars: number; lotCars: number; driveways: number; ramps: number }
@@ -73,7 +75,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
     const idxAt = (sM: number) => { const x = Math.max(0, Math.min(cl.length, sM)); let lo = 0, hi = n - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (cl.s[mid] <= x) lo = mid; else hi = mid - 1; } return lo; };
     const at = (i: number, lat: number): P2 => { const r = right(i); return { x: P[i].x + r.x * lat, y: P[i].y + r.y * lat }; };
     const urban = (i: number) => !!road && !road.lanes[i]?.edgeLines && !road.lanes[i]?.lot;
-    const H = (p: P2) => { const q = nearest(p, 40); if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + g.vergeReach(q.i, q.lat < 0 ? -1 : 1)) return g.surfaceAt(q.i, q.lat); return ground(p.x, p.y) ?? (q.i >= 0 ? g.surfaceAt(q.i, q.lat) : 0); };
+    const H = (p: P2) => { const sy = opts.surface?.(p.x, p.y); if (sy != null) return sy; const q = nearest(p, 40); if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + g.vergeReach(q.i, q.lat < 0 ? -1 : 1)) return g.surfaceAt(q.i, q.lat); return ground(p.x, p.y) ?? (q.i >= 0 ? g.surfaceAt(q.i, q.lat) : 0); };
     const stubSegs = (opts.stubs ?? []).flatMap((st) => st.pts.slice(1).map((b, k) => ({ a: st.pts[k], b, h: st.half })));
     const onStub = (p: P2, pad = 0) => stubSegs.some((s) => { const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((p.x - s.a.x) * dx + (p.y - s.a.y) * dy) / l2)); return Math.hypot(p.x - s.a.x - dx * t, p.y - s.a.y - dy * t) < s.h + pad; });
 
@@ -305,9 +307,19 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
     /** A parked car: centre on the ground, facing `f` (unit plan), colour index. ~5 m x 1.85 m. */
     const car = (c: P2, f: P2, colour: number, collide: boolean) => {
         const m = mesh(collide ? 'RS_CARS' : 'RS_LOTCARS', c, carM);
-        const y = H(c), r = { x: -f.y, y: f.x };
+        const r = { x: -f.y, y: f.x };
         const len = 4.4 + (colour % 3) * 0.3, wid = 1.82, hb = 0.72, hc = 1.42;
-        const pt = (u: number, v: number, h: number): V3 => [c.x + f.x * u + r.x * v, y + h, c.y + f.y * u + r.y * v];
+        // Sit on the four wheels: the body follows the slope of the ground under them (pitch and roll).
+        const wu = len / 2 - 0.85, wv = wid / 2 - 0.12;
+        const wh = (u: number, v: number) => H({ x: c.x + f.x * u + r.x * v, y: c.y + f.y * u + r.y * v });
+        const [fl, fr, rl, rr] = [wh(wu, -wv), wh(wu, wv), wh(-wu, -wv), wh(-wu, wv)];
+        const y = (fl + fr + rl + rr) / 4;
+        const pitch = Math.max(-0.25, Math.min(0.25, ((fl + fr) - (rl + rr)) / (4 * wu))), roll = Math.max(-0.25, Math.min(0.25, ((fr + rr) - (fl + rl)) / (4 * wv)));
+        // Ground that rises into the body (a kerb, a bank, a step in the lot) would show through: no car there.
+        for (let u = -len / 2; u <= len / 2 + 1e-6; u += len / 4) for (const v of [-wid / 2, 0, wid / 2]) {
+            if (wh(u, v) - (y + u * pitch + v * roll) > 0.22) return false;
+        }
+        const pt = (u: number, v: number, h: number): V3 => [c.x + f.x * u + r.x * v, y + h + u * pitch + v * roll, c.y + f.y * u + r.y * v];
         const fwd: V3 = [f.x, 0, f.y], rt: V3 = [r.x, 0, r.y];
         const paint = swatch(0, colour % 8), glass = swatch(1, colour % 8), tyre = swatch(2, 0);
         const hl = len / 2, hw = wid / 2;
@@ -337,6 +349,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
         m.face([pt(-hl - 0.01, hw - 0.1, hb - 0.25), pt(-hl - 0.01, hw - 0.45, hb - 0.25), pt(-hl - 0.01, hw - 0.45, hb - 0.1), pt(-hl - 0.01, hw - 0.1, hb - 0.1)], [-fwd[0], 0, -fwd[2]], swatch(3, 1));
         m.face([pt(-hl - 0.01, -hw + 0.45, hb - 0.25), pt(-hl - 0.01, -hw + 0.1, hb - 0.25), pt(-hl - 0.01, -hw + 0.1, hb - 0.1), pt(-hl - 0.01, -hw + 0.45, hb - 0.1)], [-fwd[0], 0, -fwd[2]], swatch(3, 1));
         if (collide) box(hit(c), [c.x, y, c.y], [f.x, 0, f.y], wid, len, 1.3);
+        return true;
     };
     // Parking lanes on the route: the outer 2.4 m of each side where OSM maps parking.
     if (road) {
@@ -353,8 +366,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
                 if (onStub(p, 5)) continue;
                 if (hash2(sM, side) > occ) continue;
                 const t = cl.tangents[i], dir = side > 0 ? { x: t.x, y: t.y } : { x: -t.x, y: -t.y };
-                car(p, dir, Math.floor(hash2(sM * 3, side) * 64), true);
-                stats.parkedCars++;
+                if (car(p, dir, Math.floor(hash2(sM * 3, side) * 64), true)) stats.parkedCars++;
             }
         }
     }
@@ -395,8 +407,7 @@ export function buildRoadside(cl: Centerline, g: TrackGeometry, road: RoadInfo |
                 if (q.i >= 0 && Math.abs(q.lat) < g.halfAt(q.i) + 3) continue;
                 if (onStub(p, 2)) continue;
                 const face = vv === v ? ay : { x: -ay.x, y: -ay.y };
-                car(p, face, Math.floor(rand() * 64), false);
-                stats.lotCars++;
+                if (car(p, face, Math.floor(rand() * 64), false)) stats.lotCars++;
             }
         }
     }

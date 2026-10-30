@@ -4,8 +4,8 @@
 // imagery is never copied into the track). Facade photos: the driver's own photo of a landmark, put on the
 // building wall clicked in the preview.
 
-import React, { useRef } from 'react';
-import { Camera, Check, ClipboardCopy, Eye, ImagePlus, MapPinned, MessageSquarePlus, Trash2, X } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Camera, Check, ClipboardCopy, Eye, ImagePlus, MapPinned, MessageSquarePlus, Store, Trash2, X } from 'lucide-react';
 
 export interface ReviewNote {
     id: string;
@@ -26,7 +26,31 @@ export interface FacadePhoto {
     label?: string;
 }
 
-export type ReviewTool = 'note' | 'photo';
+/** A business OpenStreetMap lacks, named on the building it's in (gets a storefront and sign). */
+export interface NamedBusiness {
+    id: string;
+    s: number;
+    point: { x: number; y: number; z: number };
+    at: { lat: number; lon: number };
+    name: string;
+    /** Key into BUSINESS_KINDS. */
+    kind: string;
+}
+
+/** Business types and the OpenStreetMap tags the builder reads (the sign's small line and the storefront). */
+export const BUSINESS_KINDS: Record<string, { label: string; tags: Record<string, string> }> = {
+    arcade: { label: 'Arcade / entertainment', tags: { leisure: 'amusement_arcade' } },
+    shop: { label: 'Shop', tags: { shop: 'yes' } },
+    restaurant: { label: 'Restaurant', tags: { amenity: 'restaurant' } },
+    cafe: { label: 'Cafe', tags: { amenity: 'cafe' } },
+    bar: { label: 'Bar', tags: { amenity: 'bar' } },
+    gym: { label: 'Gym', tags: { leisure: 'fitness_centre' } },
+    salon: { label: 'Salon', tags: { shop: 'hairdresser' } },
+    dentist: { label: 'Dentist', tags: { amenity: 'dentist' } },
+    office: { label: 'Office', tags: { office: 'yes' } },
+};
+
+export type ReviewTool = 'note' | 'photo' | 'business';
 
 interface Props {
     tool: ReviewTool | null;
@@ -39,6 +63,11 @@ interface Props {
     pendingPhoto: Omit<FacadePhoto, 'dataUrl' | 'id'> | null;
     /** A straightened frame from the drive video, waiting for its wall to be clicked. */
     pendingFrame?: string | null;
+    businesses: NamedBusiness[];
+    setBusinesses: (b: NamedBusiness[]) => void;
+    /** A wall was clicked with the business tool and is waiting for its name. */
+    pendingBusiness: Omit<NamedBusiness, 'id' | 'name' | 'kind'> | null;
+    cancelBusiness: () => void;
     onPhotoChosen: (file: File) => void;
     cancelPhoto: () => void;
     activeId: string | null;
@@ -71,7 +100,7 @@ export async function dataUrlToRgba(url: string): Promise<{ width: number; heigh
     return { width: 512, height: 512, data: new Uint8Array(ctx.getImageData(0, 0, 512, 512).data.buffer.slice(0)) };
 }
 
-const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, setPhotos, pendingPhoto, pendingFrame, onPhotoChosen, cancelPhoto, activeId, setActiveId, onView, onStreetView }) => {
+const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, setPhotos, pendingPhoto, pendingFrame, businesses, setBusinesses, pendingBusiness, cancelBusiness, onPhotoChosen, cancelPhoto, activeId, setActiveId, onView, onStreetView }) => {
     const file = useRef<HTMLInputElement>(null);
     const open = notes.filter((n) => !n.done).length;
     const copy = () => {
@@ -89,7 +118,22 @@ const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, 
             <div className="flex gap-1">
                 <button type="button" className={btn(tool === 'note')} onClick={() => setTool(tool === 'note' ? null : 'note')}><MessageSquarePlus className="w-4 h-4" /> Pin a note</button>
                 <button type="button" className={btn(tool === 'photo')} onClick={() => setTool(tool === 'photo' ? null : 'photo')} disabled={photos.length >= MAX_FACADE_PHOTOS}><Camera className="w-4 h-4" /> Facade photo</button>
+                <button type="button" className={btn(tool === 'business')} onClick={() => setTool(tool === 'business' ? null : 'business')}><Store className="w-4 h-4" /> Name a business</button>
             </div>
+            {tool === 'business' && !pendingBusiness && <p className="text-xs text-white/50">For a business OpenStreetMap doesn't have: click the front wall of its unit in the preview, then type its name. It gets a storefront and a sign on the next rebuild.</p>}
+            {pendingBusiness && <BusinessForm s={pendingBusiness.s} onCancel={cancelBusiness} onAdd={(name, kind) => { setBusinesses([...businesses, { id: `biz${Date.now().toString(36)}`, ...pendingBusiness, name, kind }]); cancelBusiness(); }} />}
+            {businesses.length > 0 && (
+                <ul className="space-y-1">
+                    {businesses.map((b) => (
+                        <li key={b.id} className="flex items-center gap-2 rounded-lg bg-black/30 p-2 text-xs">
+                            <Store className="w-3.5 h-3.5 text-white/40" />
+                            <span className="flex-1 truncate">{b.name} <span className="text-white/40">· {BUSINESS_KINDS[b.kind]?.label ?? b.kind} · {m(b.s)}</span></span>
+                            <button type="button" title="View from the road" onClick={() => onView(b.s, b.point)} className="text-white/50 hover:text-white"><Eye className="w-3.5 h-3.5" /></button>
+                            <button type="button" title="Remove" onClick={() => setBusinesses(businesses.filter((x) => x.id !== b.id))} className="text-white/50 hover:text-[#ff6b6b]"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </li>
+                    ))}
+                </ul>
+            )}
             {tool === 'note' && <p className="text-xs text-white/50">Click anything in the preview to pin a note there (a missing sign, a wrong building, a tree in the road).</p>}
             {tool === 'photo' && pendingFrame && (
                 <div className="rounded-lg border border-[#F5B700]/40 bg-[#F5B700]/5 p-2 text-xs flex items-center gap-2">
@@ -144,6 +188,23 @@ const ReviewPanel: React.FC<Props> = ({ tool, setTool, notes, setNotes, photos, 
                 </div>
             )}
         </div>
+    );
+};
+
+const BusinessForm: React.FC<{ s: number; onCancel: () => void; onAdd: (name: string, kind: string) => void }> = ({ s, onCancel, onAdd }) => {
+    const [name, setName] = useState('');
+    const [kind, setKind] = useState('shop');
+    return (
+        <form className="rounded-lg border border-[#F5B700]/40 bg-[#F5B700]/5 p-2 text-xs space-y-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) onAdd(name.trim(), kind); }}>
+            <div className="flex items-center gap-2"><span className="flex-1">Wall at {m(s)} picked.</span><button type="button" onClick={onCancel} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button></div>
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Business name, as on its sign" maxLength={40} className={input} />
+            <div className="flex gap-2">
+                <select value={kind} onChange={(e) => setKind(e.target.value)} className={`${input} flex-1`}>
+                    {Object.entries(BUSINESS_KINDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+                <button type="submit" disabled={!name.trim()} className="px-3 py-1 rounded-md bg-[#2D9E49] disabled:opacity-40">Add</button>
+            </div>
+        </form>
     );
 };
 

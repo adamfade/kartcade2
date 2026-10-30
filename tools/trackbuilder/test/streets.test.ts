@@ -388,7 +388,9 @@ test('night lights and horizon: lamp light series, window glow, tiling fix, a cu
     assert.ok(far > 19000, `ring reaches ${far.toFixed(0)} m`);
     assert.ok(minY < 60 - 20, `the earth curves away (${minY.toFixed(1)} m at 18+ km)`);
     const ext = new TextDecoder().decode(res.files['valley_st/extension/ext_config.ini']);
-    assert.match(ext, /\[LIGHT_SERIES_STREET_LAMPS\][\s\S]*CONDITION = NightLights[\s\S]*POSITION_0 = /);
+    assert.match(ext, /^\[INCLUDE: common\/conditions\.ini\]$/m, 'the night condition is defined');
+    assert.doesNotMatch(ext, /NightLights/);
+    assert.match(ext, /\[LIGHT_SERIES_STREET_LAMPS\][\s\S]*CONDITION = NIGHT_SMOOTH[\s\S]*POSITION_0 = /);
     assert.match(ext, /\[MATERIAL_ADJUSTMENT_LAMP_LENSES\]/);
     assert.match(ext, /\[SHADER_REPLACEMENT_TILING_FIX\][\s\S]*PROP_0 = ksAlphaRef, -193/);
     assert.match(ext, /\[SHADER_REPLACEMENT_FAR_FOG\][\s\S]*MATERIALS = horizon/);
@@ -447,4 +449,37 @@ test('pulling into a parking lot: the route ends down a parking aisle, paved flu
     assert.ok(res.featureStats.detail!.storefronts >= 1);
     const k = readKn5(res.files['to_kartcade/to_kartcade.kn5']);
     assert.equal(k.consumed, k.total);
+});
+
+test('drivable surroundings: wide solid ground, end aprons, inward walls, terrain backstop, nearby streets', () => {
+    const { line, terrain, site, ll } = valleyScene();
+    // A street that never meets the route, 70 m north of it.
+    site.osm!.roads!.push({ id: 6, nodes: [9001, 9002], line: [ll(480, 70), ll(780, 70)], tags: { highway: 'residential', name: 'Hill Street' } });
+    const res = buildTrack({ name: 'Valley Drive', polyline: line, heightSampler: terrain, width: 7, site, output: 'geometry' });
+    const g = res.geometry, cl = res.centerline, n = cl.points.length;
+    // The verge reaches ~150 m where nothing limits it.
+    assert.ok(g.vergeReach(Math.round(n * 0.85), -1) > 120, `verge ${g.vergeReach(Math.round(n * 0.85), -1).toFixed(0)} m`);
+    const all = [...g.parts, ...res.terrain, ...res.bridges, ...res.streets];
+    assert.ok(all.some((p) => /^1(GRASS|ROAD_PAVED|ROAD_LOTV)_APRON_A/.test(p.name)) && all.some((p) => /^1(GRASS|ROAD_PAVED|ROAD_LOTV)_APRON_B/.test(p.name)), 'aprons past both ends');
+    // Walls face the drivable side only (one-sided, two layers).
+    const centre = (x: number, z: number) => { let best = 0, bd = Infinity; for (let i = 0; i < n; i++) { const d = (cl.points[i].x - x) ** 2 + (cl.points[i].y - z) ** 2; if (d < bd) { bd = d; best = i; } } return cl.points[best]; };
+    for (const name of ['1WALL_L', '1WALL_R', '1WALL_ENDA', '1WALL_ENDB']) {
+        const w = g.parts.find((p) => p.name === name)!;
+        let inward = 0, out = 0;
+        for (let t = 0; t < w.indices.length; t += 3) {
+            const [a, b, c] = [w.indices[t], w.indices[t + 1], w.indices[t + 2]].map((v) => [w.positions[v * 3], w.positions[v * 3 + 1], w.positions[v * 3 + 2]]);
+            const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            const nx = u[1] * v[2] - u[2] * v[1], nz = u[0] * v[1] - u[1] * v[0];
+            const cx = (a[0] + b[0] + c[0]) / 3, cz = (a[2] + b[2] + c[2]) / 3, p = centre(cx, cz);
+            if (nx * (p.x - cx) + nz * (p.y - cz) > 0) inward++; else out++;
+        }
+        assert.ok(inward > 0 && out === 0, `${name}: ${inward} inward, ${out} outward faces`);
+    }
+    // Backstop: solid terrain and a wall round the map.
+    assert.ok(res.terrain.some((p) => p.name.startsWith('1GRASS_TERRAIN')), 'terrain is solid');
+    assert.ok(g.parts.some((p) => p.name === '1WALL_MAP'), 'map edge wall');
+    // The parallel street is drawn as road.
+    assert.ok((res.streetStats!.streets ?? 0) >= 1, JSON.stringify(res.streetStats));
+    const side = res.streets.filter((p) => p.name.startsWith('1ROAD_SIDE'));
+    assert.ok(side.some((p) => { for (let k = 0; k < p.positions.length; k += 3) if (Math.abs(p.positions[k + 2] - 70) < 4 && p.positions[k] > 600 && p.positions[k] < 700) return true; return false; }), 'Hill Street surface');
 });

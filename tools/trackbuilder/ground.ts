@@ -239,6 +239,40 @@ function surfaceAbove(s: SurfaceRaster, p: { lat: number; lon: number }): number
     return Number.isFinite(v) ? v : null;
 }
 
+/** Ground class at a spot from the site rasters (photo, near-infrared, lidar height above ground). */
+export function groundClassAt(site: SiteRasters): (p: { lat: number; lon: number }) => GroundClass {
+    const sample = siteImageSampler(site);
+    return (at) => {
+        const rgb = sample(at) ?? [96, 104, 72];
+        const cell = site.cells.find((c) => at.lon >= c.bbox.west && at.lon < c.bbox.east && at.lat >= c.bbox.south && at.lat < c.bbox.north);
+        const nir = cell?.nir ? sampleImage(cell.nir, at)?.[0] ?? null : null;
+        const above = cell?.surface ? surfaceAbove(cell.surface, at) : null;
+        return classifyGround(rgb, nir, above);
+    };
+}
+
+/**
+ * Split triangles by a test on their centre and corners (x east, z north): those passing go to a renamed copy.
+ * Used to give paved ground in the verge road grip.
+ */
+export function splitWhere(parts: MeshPart[], test: (pts: { x: number; z: number }[]) => boolean, rename: (name: string) => string): { inside: MeshPart[]; outside: MeshPart[] } {
+    const inside: MeshPart[] = [], outside: MeshPart[] = [];
+    for (const part of parts) {
+        const keep: number[] = [], take: number[] = [];
+        const P = part.positions;
+        for (let t = 0; t < part.indices.length; t += 3) {
+            const [a, b, c] = [part.indices[t], part.indices[t + 1], part.indices[t + 2]];
+            const pts = [a, b, c].map((v) => ({ x: P[v * 3], z: P[v * 3 + 2] }));
+            pts.push({ x: (pts[0].x + pts[1].x + pts[2].x) / 3, z: (pts[0].z + pts[1].z + pts[2].z) / 3 });
+            (test(pts) ? take : keep).push(a, b, c);
+        }
+        if (!take.length) { outside.push(part); continue; }
+        if (keep.length) outside.push({ ...part, indices: keep });
+        inside.push({ ...part, name: rename(part.name), indices: take });
+    }
+    return { inside, outside };
+}
+
 /**
  * Rivers and lakes: terrain triangles inside mapped water become a separate water mesh (3DEP elevation is
  * hydro-flattened, so the terrain already lies at the water surface). Returns the land and the water parts.

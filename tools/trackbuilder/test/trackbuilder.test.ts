@@ -79,7 +79,8 @@ test('full build: KN5 round-trips, meshes are valid, AI and zip are complete', (
         names.push(n.name);
         if (n.type === 2) { assert.equal(n.badNumbers, 0); assert.ok(n.maxIndex! < n.vertexCount!); assert.ok(n.materialId! < k.materials.length); }
     });
-    for (const want of ['1ROAD_0', '1GRASS_L_0', '1GRASS_R_0', '1GRAVEL_L_0', '1GRAVEL_R_0', 'PAINT_WHITE_0', 'PAINT_YELLOW_0', '1WALL_L', 'AC_START_0', 'AC_PIT_0', 'AC_HOTLAP_START_0', 'AC_TIME_0_L', 'AC_TIME_0_R', 'AC_TIME_1_L', 'AC_TIME_1_R', 'AC_AB_START_L', 'AC_AB_START_R', 'AC_AB_FINISH_L', 'AC_AB_FINISH_R']) assert.ok(names.includes(want), `missing ${want}`);
+    for (const want of ['1ROAD_0', '1GRASS_L_0', '1GRASS_R_0', '1GRAVEL_L_0', '1GRAVEL_R_0', 'PAINT_WHITE_0', 'PAINT_YELLOW_0', '1WALL_L', 'AC_START_0', 'AC_PIT_0', 'AC_HOTLAP_START_0', 'AC_TIME_0_L', 'AC_TIME_0_R', 'AC_AB_START_L', 'AC_AB_START_R', 'AC_AB_FINISH_L', 'AC_AB_FINISH_R']) assert.ok(names.includes(want), `missing ${want}`);
+    assert.ok(!names.includes('AC_TIME_1_L'), 'one split only on a point-to-point road');
     const n = res.centerline.points.length;
     assert.equal(res.files['test_hill_rd/ai/fast_lane.ai'], undefined); // AI spline off until verified in game
     void n;
