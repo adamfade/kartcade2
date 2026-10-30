@@ -13,11 +13,11 @@ import business, { stations, minPrice, weekRows, fullAddress } from '../config/b
 // OFFER: edit this block to change the promotion. Set `enabled: false` to show no offer banner.
 // ---------------------------------------------------------------------------
 const OFFER = {
-    enabled: false,
+    enabled: true,
     eyebrow: 'PDX Parent readers',
-    headline: 'Offer headline goes here',
-    detail: 'One sentence on what they get and how to claim it.',
-    finePrint: 'Valid through January 4, 2027. Mention PDX Parent when you book or arrive.',
+    headline: 'Your first hour for $20',
+    detail: 'Any simulator, $20 per driver for your first hour. Mention PDX Parent when you check in.',
+    finePrint: 'First visit only. Book online with the usual deposit or walk in; we adjust your balance at check-in. Valid through January 4, 2027.',
 };
 
 const PdxParentLandingPage: React.FC = () => {
