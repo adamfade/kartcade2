@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import siteConfig from '../config/site';
 import { bookingConfig, bookingApi, isApiConfigured } from '../config/booking';
+import { withAttribution } from '../utils/attribution';
 import { useAuth } from '../contexts/AuthContext';
 import { getEquipmentTypeFromStation } from '../config/membership';
 import PayPalCheckout from '../components/PayPalCheckout';
@@ -474,7 +475,7 @@ const BookingPage: React.FC = () => {
                         name: formData.name,
                         email: formData.email,
                         phone: formData.phone,
-                        notes: formData.notes,
+                        notes: withAttribution(formData.notes),
                         stationEquipment: equipmentCart
                     }
                 })

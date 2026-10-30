@@ -10,6 +10,7 @@ import {
     sendPasswordResetEmail,
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, increment } from 'firebase/firestore';
+import { getAttribution } from '../utils/attribution';
 import { auth, db, googleProvider } from '../config/firebase';
 import { UserCredits, BonusCredits, UserMembership, UserMembershipsMap, DEFAULT_CREDITS, DEFAULT_BONUS_CREDITS, DEFAULT_MEMBERSHIPS } from '../config/membership';
 import { bookingConfig } from '../config/booking';
@@ -130,6 +131,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                 waiverAccepted: false, // Will be set in Onboarding
                 rulesAccepted: false,  // Will be set in Onboarding
                 createdAt: serverTimestamp(),
+                acquisition: getAttribution(), // campaign that brought them, or null
                 // Initialize with empty credits and no membership
                 credits: DEFAULT_CREDITS,
                 bonusCredits: DEFAULT_BONUS_CREDITS,
@@ -349,6 +351,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             rulesAccepted: true,  // Email form has checkbox
             waiverAcceptedAt: serverTimestamp(),
             createdAt: serverTimestamp(),
+            acquisition: getAttribution(), // campaign that brought them, or null
             credits: DEFAULT_CREDITS,
             bonusCredits: DEFAULT_BONUS_CREDITS,
             memberships: DEFAULT_MEMBERSHIPS,

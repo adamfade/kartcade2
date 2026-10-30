@@ -38,7 +38,7 @@ export default async function handler(req: any, res: any) {
         const userAgent = req.headers['user-agent'] || '';
 
         // Validate channel
-        const allowedChannels = ['mailer', 'email', 'august'];
+        const allowedChannels = ['mailer', 'email', 'august', 'pdxparent'];
         if (!channel || !allowedChannels.includes(channel)) {
             return res.status(400).json({ error: 'Invalid or missing channel' });
         }
@@ -56,8 +56,11 @@ export default async function handler(req: any, res: any) {
         
         // Save scan/hit to Firestore
         const docRef = db.collection('campaign_scans').doc();
+        const tag = (v: any) => String(v || '').toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 40);
         await docRef.set({
             channel,
+            utmMedium: tag(req.query.utm_medium || req.body?.utm_medium),
+            utmCampaign: tag(req.query.utm_campaign || req.body?.utm_campaign),
             userAgent,
             ipHash: ip ? createHash(String(ip)) : 'unknown',
             timestamp: admin.firestore.FieldValue.serverTimestamp(),

@@ -14,6 +14,7 @@ import CalendarPicker from '../components/CalendarPicker';
 import PayPalCheckout from '../components/PayPalCheckout';
 import gsap from 'gsap';
 import business from '../config/business';
+import { withAttribution } from '../utils/attribution';
 
 const PartyBookingPage: React.FC = () => {
     const navigate = useNavigate();
@@ -338,7 +339,7 @@ const PartyBookingPage: React.FC = () => {
                         name: formData.name,
                         email: formData.email,
                         phone: formData.phone,
-                        notes: `[PARTY] ${formData.notes}`,
+                        notes: withAttribution(`[PARTY] ${formData.notes}`),
                         isParty: 'true',
                         totalPrice: totalPrice,
                         paymentMethod: paymentMethodString,

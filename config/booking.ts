@@ -6,6 +6,7 @@
 // ============================================================
 
 import business, { station, hoursByDay, earliestOpen, latestClose } from './business';
+import { withAttribution } from '../utils/attribution';
 
 export const bookingConfig = {
     // ✅ LIVE - Connected to kartcade.website@gmail.com Google Sheets
@@ -148,7 +149,7 @@ export const bookingApi = {
                 email: bookingData.email,
                 phone: bookingData.phone,
                 paymentMethod: bookingData.paymentMethod,
-                notes: bookingData.notes || ''
+                notes: withAttribution(bookingData.notes)
             });
 
             const url = `${bookingConfig.API_URL}?${params.toString()}`;

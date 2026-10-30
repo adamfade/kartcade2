@@ -1,6 +1,8 @@
 // ============================================================
 // KARTCADE BOOKING SYSTEM v2.4 - 30-MIN BOOKING SUPPORT
 // ============================================================
+// v2.7: new bookings write a marketing Source to column M (see extractSource)
+// ============================================================
 // CHANGES FROM v2.3:
 // - FIXED: parseStationString now handles decimal durations (0.5h, 1.5h)
 // - FIXED: getAvailability uses parseFloat (parseInt("0.5") was returning 0)
@@ -377,7 +379,8 @@ function createBatchBooking(items, user) {
 
         BOOKINGS_SHEET.appendRow([
             bookingId, item.date, item.time, station.name, item.drivers,
-            user.name, user.email, user.phone, user.paymentMethod, 'Confirmed', createdAt, paymentStatus
+            user.name, user.email, user.phone, user.paymentMethod, 'Confirmed', createdAt, paymentStatus,
+            extractSource(user.notes)
         ]);
 
         const price = getSetting(station.priceKey) || 0;
@@ -390,6 +393,15 @@ function createBatchBooking(items, user) {
     sendOwnerBatchNotification(user, bookingId, bookedItems, totalPrice);
 
     return createResponse({ success: true, bookingId: bookingId, message: 'Batch booking confirmed' });
+}
+
+/**
+ * v2.7: marketing source for column M ("Source"). The website prefixes booking notes with
+ * "[SRC: pdxparent/email/holiday26]" when the customer arrived from a tracked campaign link.
+ */
+function extractSource(notes) {
+    const match = String(notes || '').match(/\[SRC:\s*([^\]]+)\]/);
+    return match ? match[1].trim() : '';
 }
 
 function createBooking(data) {
@@ -413,7 +425,8 @@ function createBooking(data) {
     BOOKINGS_SHEET.appendRow([
         bookingId, data.date, data.time, stationDisplay, data.drivers,
         data.name, data.email, data.phone, data.paymentMethod || 'venue',
-        'Confirmed', createdAt, paymentStatus
+        'Confirmed', createdAt, paymentStatus,
+        extractSource(data.notes)
     ]);
 
     try { sendConfirmationEmail(data, bookingId, stationDisplay, durationHours); } catch (e) { }

@@ -40,7 +40,11 @@ import CheckoutCancelPage from './pages/CheckoutCancelPage';
 import OnboardingPage from './pages/OnboardingPage';
 import BeatTheProPage from './pages/BeatTheProPage';
 import CampaignLandingPage from './pages/CampaignLandingPage';
+import PdxParentLandingPage from './pages/PdxParentLandingPage';
 import NotFound from './pages/NotFound';
+
+// Utils
+import { captureAttribution } from './utils/attribution';
 
 // Context
 import { AuthProvider } from './contexts/AuthContext';
@@ -61,9 +65,18 @@ const ScrollToTop = () => {
   return null;
 };
 
+// Remember which campaign (UTM tags or a campaign landing page) brought the visitor
+const AttributionCapture = () => {
+  const { pathname, search } = useLocation();
+  useEffect(() => {
+    captureAttribution(pathname, search);
+  }, [pathname, search]);
+  return null;
+};
+
 const AppContent: React.FC = () => {
   const location = useLocation();
-  const isCampaignPage = ['/mailer', '/august', '/email'].includes(location.pathname.toLowerCase());
+  const isCampaignPage = ['/mailer', '/august', '/email', '/pdxparent'].includes(location.pathname.toLowerCase().replace(/\/+$/, ''));
 
   return (
     <div className="relative min-h-screen">
@@ -107,6 +120,7 @@ const AppContent: React.FC = () => {
             <Route path="/mailer" element={<CampaignLandingPage />} />
             <Route path="/august" element={<CampaignLandingPage />} />
             <Route path="/email" element={<CampaignLandingPage />} />
+            <Route path="/pdxparent" element={<PdxParentLandingPage />} />
 
             {/* Custom 404 handler instead of homepage redirect */}
             <Route path="*" element={<NotFound />} />
@@ -154,6 +168,7 @@ const App: React.FC = () => {
       <ReactLenis root ref={lenisRef} options={{ duration: 1.2, smoothWheel: true }}>
         <Router>
           <ScrollToTop />
+          <AttributionCapture />
           <AppContent />
         </Router>
       </ReactLenis>
