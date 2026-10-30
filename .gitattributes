@@ -1,0 +1,3 @@
+hub/windows/*.bat -text
+hub/windows/*.ps1 -text
+hub/windows/*.vbs -text

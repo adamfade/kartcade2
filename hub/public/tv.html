@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kartcade TV</title>
+<style>
+@font-face { font-family: Outfit; src: url(/fonts/outfit.woff2) format('woff2'); font-weight: 100 900; }
+@font-face { font-family: Mono; src: url(/fonts/mono.woff2) format('woff2'); font-weight: 700; }
+:root { --bg:#0A0A0A; --card:#141414; --line:#262626; --red:#D42428; --green:#2D9E49; --dim:#8a8a8a; --text:#fff; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: Outfit, system-ui, sans-serif; overflow: hidden; cursor: none; }
+.app { height: 100vh; display: flex; flex-direction: column; padding: 2.2vw 2.6vw 2vw; gap: 1.6vw; }
+header { display: flex; align-items: center; gap: 2vw; }
+header img { height: 2.6vw; }
+header .title { font-size: 2.2vw; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; }
+header .sub { font-size: 1.3vw; color: var(--dim); font-weight: 500; }
+header .right { margin-left: auto; display: flex; align-items: center; gap: 1.5vw; }
+.clock { font-family: Mono; font-size: 1.8vw; }
+.chip { font-size: 1.05vw; font-weight: 600; padding: .35vw .9vw; border-radius: 99px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+.chip.red { background: var(--red); border-color: var(--red); color: #fff; }
+.chip.green { border-color: var(--green); color: var(--green); }
+.dot { width: .8vw; height: .8vw; border-radius: 50%; background: var(--green); display: inline-block; }
+.dot.off { background: var(--red); }
+.mono { font-family: Mono; font-variant-numeric: tabular-nums; }
+main { flex: 1; min-height: 0; }
+
+/* leaderboard mode */
+.lb { height: 100%; display: flex; flex-direction: column; gap: 1.4vw; }
+.lb-head h1 { font-size: 3.4vw; font-weight: 800; line-height: 1.05; }
+.lb-head p { font-size: 1.6vw; color: var(--dim); margin-top: .3vw; }
+.lb-cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2vw; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 1vw; padding: 1.4vw 1.6vw; display: flex; flex-direction: column; min-height: 0; }
+.panel h2 { font-size: 1.3vw; text-transform: uppercase; letter-spacing: .12em; color: var(--red); font-weight: 700; margin-bottom: .8vw; }
+.row { display: grid; grid-template-columns: 3vw 1fr auto; align-items: center; gap: 1vw; padding: .55vw 0; border-bottom: 1px solid var(--line); font-size: 1.7vw; }
+.row:last-child { border-bottom: 0; }
+.row .pos { color: var(--dim); font-weight: 700; }
+.row.p1 .pos { color: var(--red); }
+.row .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .t { font-family: Mono; }
+.row .gap { color: var(--dim); font-size: 1.1vw; font-family: Mono; margin-left: .8vw; }
+.empty { color: var(--dim); font-size: 1.6vw; padding: 2vw 0; }
+.dots { display: flex; gap: .6vw; justify-content: center; }
+.dots span { width: .7vw; height: .7vw; border-radius: 50%; background: var(--line); }
+.dots span.on { background: var(--red); }
+
+/* race mode */
+.race { height: 100%; display: grid; grid-template-columns: 1fr 30vw; gap: 1.6vw; }
+.tiles { display: grid; gap: 1.1vw; grid-auto-rows: 1fr; min-height: 0; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 1vw; padding: 1vw 1.2vw; display: flex; flex-direction: column; justify-content: space-between; min-height: 0; overflow: hidden; position: relative; }
+.tile.leader { border-color: var(--green); box-shadow: inset 0 0 0 2px var(--green); }
+.tile.idle { opacity: .55; }
+.tile .top { display: flex; justify-content: space-between; align-items: baseline; gap: .8vw; }
+.tile .rig { font-size: 1vw; font-weight: 700; color: var(--red); text-transform: uppercase; letter-spacing: .1em; }
+.tile .driver { font-size: 1.9vw; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .cur { font-family: Mono; font-size: 3.2vw; line-height: 1; }
+.tile .cur.stop { color: var(--dim); }
+.tile .stats { display: grid; grid-template-columns: 1fr 1fr auto; gap: 1vw; font-size: .9vw; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.tile .stats span { display: grid; gap: .2vw; }
+.tile .stats b { font-family: Mono; color: var(--text); font-weight: 700; font-size: 1.35vw; letter-spacing: 0; }
+.tile .stats b.best { color: var(--green); }
+.tile .stats b.bad { color: var(--red); text-decoration: line-through; }
+.tile .note { font-size: 1vw; color: var(--red); }
+.tile.pb { background: #12301b; }
+.standings .row { font-size: 1.55vw; padding: .45vw 0; }
+.final { position: absolute; inset: auto 0 0 0; }
+.banner { background: var(--red); color: #fff; font-weight: 800; font-size: 1.4vw; text-transform: uppercase; letter-spacing: .1em; padding: .5vw 1vw; border-radius: .6vw; text-align: center; margin-bottom: .8vw; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <img src="/logo.png" alt="Kartcade">
+    <div>
+      <div class="title" id="title">Hot laps</div>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="right">
+      <span class="chip" id="scope" hidden></span>
+      <span class="chip" id="elapsed" hidden></span>
+      <span class="dot" id="conn" title="Hub link"></span>
+      <span class="clock" id="clock"></span>
+    </div>
+  </header>
+  <main id="main"></main>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = (ms) => {
+  if (!ms || ms <= 0) return '-:--.---';
+  const m = Math.floor(ms / 60000), s = (ms % 60000) / 1000;
+  return m + ':' + s.toFixed(3).padStart(6, '0');
+};
+const fmtGap = (ms) => '+' + (ms / 1000).toFixed(3);
+const rigName = (id) => id.replace(/^rig-0?/i, 'Rig ').replace(/^motion-0?/i, 'Motion ').replace(/^kart-0?/i, 'Kart ');
+
+let state = null, skew = 0, boardIdx = 0, boardAt = 0, lastBest = {}, pbUntil = {};
+const BOARD_SECONDS = 15;
+
+function rows(list, limit) {
+  if (!list.length) return '<div class="empty">No laps yet. Be the first.</div>';
+  const lead = list[0].ms;
+  return list.slice(0, limit).map((r, i) => `
+    <div class="row ${i === 0 ? 'p1' : ''}">
+      <span class="pos">${i + 1}</span>
+      <span class="name">${esc(r.driver)}</span>
+      <span><span class="t">${fmt(r.ms)}</span>${i ? `<span class="gap">${fmtGap(r.ms - lead)}</span>` : ''}</span>
+    </div>`).join('');
+}
+
+function renderLeaderboard() {
+  const boards = state.boards || [];
+  $('title').textContent = 'Hot laps';
+  $('scope').hidden = true; $('elapsed').hidden = true;
+  if (!boards.length) {
+    $('sub').textContent = 'Fastest laps on our rigs';
+    $('main').innerHTML = '<div class="lb"><div class="lb-head"><h1>Set a lap. Get on the board.</h1><p>Today\'s and this week\'s fastest drivers show here.</p></div></div>';
+    return;
+  }
+  if (Date.now() - boardAt > BOARD_SECONDS * 1000) { boardIdx = (boardIdx + (boardAt ? 1 : 0)) % boards.length; boardAt = Date.now(); }
+  const b = boards[boardIdx % boards.length];
+  $('sub').textContent = 'Fastest laps on our rigs';
+  $('main').innerHTML = `
+    <div class="lb">
+      <div class="lb-head"><h1>${esc(b.track)}</h1><p>${esc(b.car)}</p></div>
+      <div class="lb-cols">
+        <div class="panel"><h2>Today</h2>${rows(b.today, 10)}</div>
+        <div class="panel"><h2>This week</h2>${rows(b.week, 10)}</div>
+      </div>
+      ${boards.length > 1 ? `<div class="dots">${boards.map((_, i) => `<span class="${i === boardIdx % boards.length ? 'on' : ''}"></span>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+function tileHtml(r, leaderRig) {
+  const best = r.best ? `<b class="${r.rigId === leaderRig ? 'best' : ''}">${fmt(r.best.ms)}</b>` : '<b>-</b>';
+  const last = r.last ? `<b class="${r.last.valid ? '' : 'bad'}">${fmt(r.last.ms)}</b>` : '<b>-</b>';
+  return `
+    <div class="tile ${r.rigId === leaderRig ? 'leader' : ''} ${r.online ? '' : 'idle'} ${(pbUntil[r.rigId] || 0) > Date.now() ? 'pb' : ''}">
+      <div class="top"><span class="rig">${esc(rigName(r.rigId))}</span>${r.online ? '' : '<span class="rig" style="color:var(--dim)">offline</span>'}</div>
+      <div class="driver">${esc(r.driver || 'Open')}</div>
+      <div class="cur ${r.running ? '' : 'stop'}" data-rig="${esc(r.rigId)}">${r.running ? fmt(r.curMs) : (r.best ? fmt(r.best.ms) : '-:--.---')}</div>
+      <div class="stats"><span>Best${best}</span><span>Last${last}</span><span>Laps<b>${r.laps}</b></span></div>
+      ${r.offScope ? '<div class="note">Not on the race track/car</div>' : ''}
+    </div>`;
+}
+
+function renderRace() {
+  const race = state.race;
+  $('title').textContent = race.name || 'Race';
+  $('sub').textContent = race.scope === 'match'
+    ? [race.track || 'Track set by first lap', race.car || 'Car set by first lap'].join('  ·  ')
+    : 'Best lap on each rig since the start';
+  $('scope').hidden = false;
+  $('scope').textContent = race.scope === 'match' ? 'This track & car' : 'All laps';
+  $('scope').className = 'chip ' + (race.scope === 'match' ? 'green' : '');
+  $('elapsed').hidden = false;
+
+  const rigs = race.rigs || [];
+  for (const r of rigs) {   // highlight a tile for a few seconds when its best improves
+    const key = race.id + r.rigId;
+    if (r.best && lastBest[key] && r.best.ms < lastBest[key]) pbUntil[r.rigId] = Date.now() + 4000;
+    if (r.best) lastBest[key] = r.best.ms;
+  }
+  const leaderRig = (() => { let b = null; for (const r of rigs) if (r.best && (!b || r.best.ms < b.best.ms)) b = r; return b?.rigId; })();
+  const n = Math.max(rigs.length, 1);
+  const cols = n <= 2 ? n : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  $('main').innerHTML = `
+    <div class="race">
+      <div class="tiles" style="grid-template-columns:repeat(${cols},1fr)">
+        ${rigs.length ? rigs.map((r) => tileHtml(r, leaderRig)).join('') : '<div class="empty">Waiting for rigs. Start the Kartcade lap timer on each rig.</div>'}
+      </div>
+      <div class="panel standings">
+        ${race.endedAt ? '<div class="banner">Final results</div>' : ''}
+        <h2>Standings</h2>
+        ${rows(race.standings || [], 12)}
+      </div>
+    </div>`;
+}
+
+function render() {
+  if (!state) return;
+  if (state.mode === 'race' && state.race) renderRace(); else renderLeaderboard();
+}
+
+function tick() {   // runs the live lap clocks between hub updates
+  const now = new Date();
+  $('clock').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (!state) return;
+  if (state.mode === 'race' && state.race) {
+    const end = state.race.endedAt || (Date.now() + skew);
+    const s = Math.max(0, Math.floor((end - state.race.startedAt) / 1000));
+    $('elapsed').textContent = (state.race.endedAt ? 'Ended ' : '') + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    for (const r of state.race.rigs || []) {
+      if (!r.running) continue;
+      const el = document.querySelector(`.cur[data-rig="${CSS.escape(r.rigId)}"]`);
+      const since = Date.now() + skew - r.liveAt;
+      if (el && since < 5000) el.textContent = fmt(r.curMs + since);
+    }
+  } else if (state.boards?.length > 1 && Date.now() - boardAt > BOARD_SECONDS * 1000) {
+    render();
+  }
+}
+
+function connect() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = (e) => {
+    state = JSON.parse(e.data);
+    skew = state.now - Date.now();
+    $('conn').className = 'dot';
+    render();
+  };
+  es.onerror = () => { $('conn').className = 'dot off'; };   // EventSource reconnects by itself
+}
+connect();
+setInterval(tick, 50);
+document.addEventListener('keydown', (e) => { if (e.key === 'r') location.reload(); });
+</script>
+</body>
+</html>
