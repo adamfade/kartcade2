@@ -92,6 +92,13 @@ Model details:
 - **The road as mapped:** width and lane lines from the OSM lanes along the way (`roadinfo.ts`), sidewalks on
   urban streets, bridges levelled and built (`bridge.ts`; pick beam, arch or truss per bridge in the editor),
   side streets, signals, stop signs, crosswalks, arrows, speed signs, street lights and bus stops (`streets.ts`).
+- **Pavement traced from the aerial photo (with lidar):** at every sample the builder looks sideways in the NAIP
+  photo (with the lidar ruling out cars and overhanging trees) for where the asphalt meets grass, dirt or gravel
+  (`edges.ts`). Where both edges are found it moves the centreline onto the middle of the pavement (up to 1.5 m,
+  eased in and out) and takes the measured width: 0.7-1.4x the mapped width on rural roads, 0.88-1.1x on streets
+  with sidewalks (grey concrete looks like road). Where pavement runs on past the expected edge (lots,
+  driveways) that side isn't trusted. Most useful on rural roads; in towns little is traced. `traceEdges: false`
+  turns it off.
 - **Drivable surroundings (with lidar):** the ground is solid for 150 m either side of the road (`DRIVABLE_M`)
   and in half-disc aprons past the start and the finish, shaped by the lidar and draped with the aerial photo.
   Mapped parking lots and ground the photo shows as paved get road grip; every OSM street crossing that ground is

@@ -7,6 +7,7 @@ import { roadProfile } from './elevation.ts';
 import type { HeightSampler, Profile } from './elevation.ts';
 import { buildGeometry, wallPart } from './mesh.ts';
 import { surfaceSampler } from './surface.ts';
+import { recentreOffsets, traceEdges } from './edges.ts';
 import type { MeshPart, TrackGeometry, V3 } from './mesh.ts';
 import { writeKn5 } from './kn5.ts';
 import { MaterialBook, entryFor, macroDetailMaterial, multilayerMaterial, paintMacro, photoMaterial, roadMacro, solidMacro } from './materials.ts';
@@ -84,6 +85,8 @@ export interface BuildInput {
      * OSM-style tags such as leisure=amusement_arcade): they get a storefront and sign like mapped ones.
      */
     businesses?: { at: { lat: number; lon: number }; name: string; tags?: Record<string, string> }[];
+    /** Trace the pavement edges in the aerial photo for the road's position and width (default true with lidar). */
+    traceEdges?: boolean;
     /** 'geometry' skips the KN5, AI line, maps and zip (for the editor's preview); default 'full'. */
     output?: 'full' | 'geometry';
     log?: (msg: string) => void;
@@ -260,8 +263,7 @@ export function buildTrack(input: BuildInput): BuildResult {
     // Reversing a loop keeps the same start/finish point.
     if (circuit && input.reverse) polyline = [polyline[polyline.length - 1], ...polyline.slice(0, -1)];
     log(circuit ? 'Smoothing the circuit loop' : 'Smoothing the centerline');
-    const cl = buildCenterline(polyline, { spacing: circuit ? 1 : 2, closed: circuit });
-    const ll = cl.points.map((p) => cl.projection.toLatLon(p));
+    let cl = buildCenterline(polyline, { spacing: circuit ? 1 : 2, closed: circuit });
     log(`Sampling elevation along ${(cl.length / 1000).toFixed(2)} km`);
     const site = input.site;
     const lidar = !!site?.cells.some((c) => c.dem);
@@ -271,7 +273,42 @@ export function buildTrack(input: BuildInput): BuildResult {
     const sigmaM = lidar ? 6 : circuit ? 12 : 18;
     // The OSM ways the route follows: lane layout, widths and bridges.
     const roads = site?.osm?.roads;
-    const road = roads?.length && input.osmLanes !== false && !circuit ? matchRoad(cl, roads, { fallbackWidth: input.width, bridgeStyles: input.bridgeStyles }) : null;
+    const matchWays = () => (roads?.length && input.osmLanes !== false && !circuit ? matchRoad(cl, roads, { fallbackWidth: input.width, bridgeStyles: input.bridgeStyles }) : null);
+    let road = matchWays();
+    // The real pavement: trace its edges in the aerial photo, move the centreline to the middle of it, and take
+    // its width (within limits of the mapped width; urban streets barely, since sidewalks are grey too).
+    let tracedWidths: Float64Array | null = null;
+    if (site && lidar && !circuit && input.traceEdges !== false) {
+        const guess = (i: number) => (road ? road.width[i] : input.width) / 2;
+        let tr = traceEdges(cl, site, guess);
+        if (tr.coverage >= 0.05) {
+            const off = recentreOffsets(tr);
+            let most = 0; for (const o of off) most = Math.max(most, Math.abs(o));
+            if (most > 0.25) {
+                const moved = cl.points.map((p, i) => { const t = cl.tangents[i]; return cl.projection.toLatLon({ x: p.x + t.y * off[i], y: p.y - t.x * off[i] }); });
+                cl = buildCenterline(moved, { spacing: 2, closed: false, smoothSigma: 3 });
+                road = matchWays();
+                tr = traceEdges(cl, site, (i: number) => (road ? road.width[i] : input.width) / 2);
+            }
+            const n = cl.points.length, w = new Float64Array(n);
+            let changed = 0;
+            for (let i = 0; i < n; i++) {
+                const base = road ? road.width[i] : input.width, ls = road?.lanes[i];
+                w[i] = base;
+                if (ls?.lot || !Number.isFinite(tr.left[i]) || !Number.isFinite(tr.right[i])) continue;
+                const [lo, hi] = ls && !ls.edgeLines ? [0.88, 1.1] : [0.7, 1.4];
+                w[i] = Math.max(3, Math.max(base * lo, Math.min(base * hi, tr.left[i] + tr.right[i])));
+                if (Math.abs(w[i] - base) > 0.3) changed++;
+            }
+            // Taper: no step in width shorter than ~30 m.
+            const sm = new Float64Array(n);
+            for (let i = 0; i < n; i++) { let a = 0, c = 0; for (let j = Math.max(0, i - 7); j <= Math.min(n - 1, i + 7); j++) { a += w[j]; c++; } sm[i] = a / c; }
+            if (road) for (let i = 0; i < n; i++) road.width[i] = sm[i];
+            tracedWidths = sm;
+            log(`Traced the pavement edges from the aerial photo over ${Math.round(tr.coverage * 100)}% of the road${most > 0.25 ? `, moved the line up to ${most.toFixed(1)} m onto it` : ''}${changed ? `, adjusted the width along ${Math.round((changed / n) * 100)}%` : ''}`);
+        }
+    }
+    const ll = cl.points.map((p) => cl.projection.toLatLon(p));
     if (road?.bridges.length) log(`Levelling ${road.bridges.length} bridge${road.bridges.length === 1 ? '' : 's'}: ${road.bridges.map((b) => b.name).join(', ')}`);
     const raw = road?.bridges.length ? levelBridges(ll.map((p) => sampler(p)), cl.s, road.bridges) : undefined;
     const profile = roadProfile(ll, cl.s, sampler, circuit ? { closed: true, loopLength: cl.length, sigmaM } : { sigmaM, raw });
@@ -280,6 +317,7 @@ export function buildTrack(input: BuildInput): BuildResult {
     const geometry = buildGeometry(cl, profile.heights, {
         width: input.width, walls: input.walls ?? true, ground, flipStart: circuit ? false : input.flipStart,
         gridSlots: input.gridSlots, markings: markingPlan(input, circuit), lidar,
+        ...(tracedWidths && !road ? { widths: tracedWidths } : {}),
         ...(road ? { widths: road.width, lanes: road.lanes, urban: road.lanes.map((l) => !l.edgeLines && !l.lot), lot: road.lanes.map((l) => !!l.lot), bridges: road.bridges.map((b) => ({ i0: Math.ceil(b.from / cl.spacing), i1: Math.floor(b.to / cl.spacing) })) } : {}),
         ...(circuit ? { verge: 25, maxBankDeg: 2 } : lidar ? { verge: DRIVABLE_M } : {}),
     });

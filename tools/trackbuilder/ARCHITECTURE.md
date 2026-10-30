@@ -77,6 +77,7 @@ coverage (`MipKind 'cutout'`), so forests don't thin out with distance.
 | 5f | Review (`ReviewPanel.tsx`): notes pinned in the preview with a view-from-the-road and a Street View compare (same spot, facing the pin), a copyable checklist; facade photos; the preview honours `lodIn`/`lodOut` | done |
 | 5g | Compare (`StreetViewPane.tsx`, `DriveVideoPane.tsx`, `drivelog.ts`, `warp.ts`): Google's Street View viewer beside the preview, following ground view (embedded, never stored); the driver's own video with its GPS log driving ground view frame by frame (`follow`, `onViewChange` on the preview), notes at the video's spot, and frames straightened into facade photos | done |
 | 5h | Drivable surroundings: 150 m lidar verges (`DRIVABLE_M`) and end aprons, paved ground split to road grip (`groundClassAt`, `splitWhere`), all nearby OSM streets as road, one-sided inward boundary walls (two layers), solid terrain and a map-edge wall as a backstop, things seated on the built surface (`surface.ts`), named businesses | done |
+| 5i | Pavement edges from the aerial photo (`edges.ts`): recentre the line on the asphalt and measure its width where both edges are traced, within limits of the mapped width | done |
 
 ## Builds
 

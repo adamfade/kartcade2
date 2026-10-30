@@ -483,3 +483,22 @@ test('drivable surroundings: wide solid ground, end aprons, inward walls, terrai
     const side = res.streets.filter((p) => p.name.startsWith('1ROAD_SIDE'));
     assert.ok(side.some((p) => { for (let k = 0; k < p.positions.length; k += 3) if (Math.abs(p.positions[k + 2] - 70) < 4 && p.positions[k] > 600 && p.positions[k] < 700) return true; return false; }), 'Hill Street surface');
 });
+
+test('pavement edges traced from the aerial photo: the line moves onto the asphalt and takes its width', () => {
+    const lat0 = 45.36, lon0 = -122.62, mLon = 111_320 * Math.cos((lat0 * Math.PI) / 180), mLat = 111_120;
+    const ll = (east: number, north: number): LatLon => ({ lat: lat0 + north / mLat, lon: lon0 + east / mLon });
+    const line: LatLon[] = []; for (let e = 0; e <= 600; e += 20) line.push(ll(e, 0));
+    // The photo's road (7 m wide) runs 1.2 m north of the mapped line; the build is told 9 m.
+    const real = line.map((p) => ({ lat: p.lat + 1.2 / mLat, lon: p.lon }));
+    const flat = () => 50;
+    const site = syntheticSite(real, flat, { cellPx: 1024 });
+    const res = buildTrack({ name: 'Edges', polyline: line, heightSampler: flat, width: 9, site, output: 'geometry' });
+    const cl = res.centerline, mid = cl.points.map((_, i) => i).filter((i) => cl.s[i] > 100 && cl.s[i] < cl.length - 100);
+    const north = mid.reduce((a, i) => a + cl.projection.toLatLon(cl.points[i]).lat, 0) / mid.length;
+    assert.ok(Math.abs((north - lat0) * mLat - 1.2) < 0.35, `centreline ${((north - lat0) * mLat).toFixed(2)} m north (want 1.2)`);
+    const w = mid.reduce((a, i) => a + res.geometry.halfAt(i) * 2, 0) / mid.length;
+    assert.ok(Math.abs(w - 7) < 0.8, `width ${w.toFixed(2)} m (want ~7)`);
+    // Off by request: the mapped line and width stay.
+    const off = buildTrack({ name: 'Edges', polyline: line, heightSampler: flat, width: 9, site, output: 'geometry', traceEdges: false });
+    assert.ok(Math.abs(off.geometry.halfAt(mid[0]) * 2 - 9) < 0.01);
+});
